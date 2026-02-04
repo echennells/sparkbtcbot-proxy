@@ -36,13 +36,7 @@ npm install
 
 ### 2. Create Upstash Redis
 
-**Option A: Web console**
-
-Go to https://console.upstash.com, create a new Redis database. Copy the REST URL and REST token.
-
-**Option B: Upstash Management API**
-
-If you have an Upstash API key (from https://console.upstash.com/account/api):
+Create an Upstash API key at https://console.upstash.com/account/api, then create a database via the API:
 
 ```bash
 curl -X POST "https://api.upstash.com/v2/redis/database" \
