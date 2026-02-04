@@ -21,7 +21,7 @@ Gives AI agents scoped wallet access without exposing the mnemonic:
 
 - Node.js 18+
 - A Vercel account (free Hobby tier works)
-- An Upstash Redis instance (free tier works)
+- An Upstash account (free tier — limited to 1 database)
 - A BIP39 mnemonic for the Spark wallet
 
 ## Step-by-Step Deployment
@@ -36,18 +36,34 @@ npm install
 
 ### 2. Create Upstash Redis
 
-Go to https://console.upstash.com and create a new Redis database. Copy the REST URL and REST token.
+**Option A: Web console**
+
+Go to https://console.upstash.com, create a new Redis database. Copy the REST URL and REST token.
+
+**Option B: Upstash Management API**
+
+If you have an Upstash API key (from https://console.upstash.com/account/api):
+
+```bash
+curl -X POST "https://api.upstash.com/v2/redis/database" \
+  -u "EMAIL:API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "sparkbtcbot-proxy", "region": "global", "primary_region": "us-east-1"}'
+```
+
+**Note:** Regional database creation is deprecated. You must use `"region": "global"` with a `"primary_region"` field. The Upstash docs may not reflect this yet.
+
+The response includes `rest_url` and `rest_token` — save these for step 5.
 
 ### 3. Generate a wallet mnemonic (if needed)
 
-```javascript
-import { SparkWallet } from "@buildonspark/spark-sdk";
-const { wallet } = await SparkWallet.initialize({
-  mnemonicOrSeed: null,
-  options: { network: "MAINNET" },
-});
-// Save the mnemonic securely — this controls the wallet funds
+`SparkWallet.initialize()` returns `{ mnemonic, wallet }` when called without a mnemonic. One-liner:
+
+```bash
+node -e "import('@buildonspark/spark-sdk').then(({SparkWallet}) => SparkWallet.initialize({mnemonicOrSeed: null, options: {network: 'MAINNET'}}).then(r => { console.log(r.mnemonic); r.wallet.cleanupConnections() }))"
 ```
+
+Save the 12-word mnemonic securely — it controls all funds in the wallet. There is no `getMnemonic()` method; you can only retrieve the mnemonic at initialization time.
 
 Or use any BIP39 mnemonic generator. 12 or 24 words.
 
@@ -63,17 +79,17 @@ openssl rand -base64 30
 npx vercel --prod
 ```
 
-When prompted, accept the defaults. Then set environment variables — use the Vercel REST API or dashboard to avoid trailing newline issues:
+When prompted, accept the defaults. Then set environment variables. All 7 are required:
 
-```
-SPARK_MNEMONIC=<12-word mnemonic>
-SPARK_NETWORK=MAINNET
-API_AUTH_TOKEN=<token from step 4>
-UPSTASH_REDIS_REST_URL=<from step 2>
-UPSTASH_REDIS_REST_TOKEN=<from step 2>
-MAX_TRANSACTION_SATS=10000
-DAILY_BUDGET_SATS=100000
-```
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `SPARK_MNEMONIC` | 12-word BIP39 mnemonic | `fence connect trigger ...` |
+| `SPARK_NETWORK` | Spark network | `MAINNET` |
+| `API_AUTH_TOKEN` | Bearer token for API auth | output of step 4 |
+| `UPSTASH_REDIS_REST_URL` | Redis REST endpoint | `https://xxx.upstash.io` |
+| `UPSTASH_REDIS_REST_TOKEN` | Redis auth token | from step 2 |
+| `MAX_TRANSACTION_SATS` | Per-transaction spending cap | `10000` |
+| `DAILY_BUDGET_SATS` | Daily spending cap (resets midnight UTC) | `100000` |
 
 **Important:** Do NOT use `vercel env add` with heredoc/`<<<` input — it appends newlines that break the Spark SDK. Either use the Vercel dashboard or the REST API:
 
@@ -108,6 +124,24 @@ claude mcp add spark-wallet \
   -e SPARK_PROXY_URL=https://<your-deployment>.vercel.app \
   -e SPARK_PROXY_TOKEN=<your-token> \
   -- node /path/to/sparkbtcbot-proxy/mcp/index.js
+```
+
+If `claude mcp add` runs silently without creating a config, you can create the `.mcp.json` file directly in your project root:
+
+```json
+{
+  "mcpServers": {
+    "spark-wallet": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/path/to/sparkbtcbot-proxy/mcp/index.js"],
+      "env": {
+        "SPARK_PROXY_URL": "https://<your-deployment>.vercel.app",
+        "SPARK_PROXY_TOKEN": "<your-token>"
+      }
+    }
+  }
+}
 ```
 
 ## API Routes
@@ -147,6 +181,6 @@ curl -H "Authorization: Bearer <token>" https://<deployment>/api/logs?limit=20
 ## Architecture
 
 - **Vercel serverless functions** — each request spins up, initializes the Spark SDK (~1.5s), handles the request, and shuts down. No always-on process, no billing when idle.
-- **Upstash Redis** — stores daily spend counters, activity logs, and pending invoice tracking. Accessed over HTTP REST (no persistent connection needed).
+- **Upstash Redis** — stores daily spend counters, activity logs, and pending invoice tracking. Accessed over HTTP REST (no persistent connection needed). Free tier is limited to 1 database.
 - **Spark SDK** — `@buildonspark/spark-sdk` connects to Spark Signing Operators via gRPC over HTTP/2. Pure JavaScript, no native addons.
 - **Lazy invoice check** — on every request, the middleware checks Redis for pending invoices and compares against recent wallet transfers. Expired invoices are cleaned up, paid ones are logged. Max 5 checks per request, wrapped in try/catch so failures never affect the main request.
