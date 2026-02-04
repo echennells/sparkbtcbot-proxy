@@ -16,13 +16,34 @@ This proxy adds a layer between the agent and the wallet:
 - **Invoice tracking** — lazy detection of paid Lightning invoices
 - **Shared access** — multiple agents or bots can use the same wallet through the API
 
-## What it does
+## Two skills, two audiences
 
-- Wraps the `@buildonspark/spark-sdk` behind authenticated REST endpoints
-- Per-transaction and daily spending limits (configurable via env vars)
-- Logs all activity (invoices, payments, transfers, errors) to Redis
-- Lazy detection of paid Lightning invoices on each request
-- 1-hour default invoice expiry (configurable per-request)
+This repo contains two separate things for two different use cases:
+
+### 1. Deploy skill (`skills/deploy/`) — for the admin agent
+
+A Claude Code skill that knows how to set up and deploy the proxy from scratch: clone the repo, configure Vercel, set env vars, deploy, rotate tokens, adjust limits. Give this to the agent that manages your infrastructure.
+
+Install:
+```bash
+# Copy to your Claude Code skills directory
+cp -r skills/deploy ~/.claude/skills/sparkbtcbot-proxy-deploy
+```
+
+### 2. MCP server (`mcp/`) — for the wallet agent
+
+10 tools for interacting with an already-running proxy: check balance, send sats, create invoices, read logs. Give this to agents that need to transact.
+
+Install:
+```bash
+cd mcp && npm install
+claude mcp add spark-wallet \
+  -e SPARK_PROXY_URL=https://your-deployment.vercel.app \
+  -e SPARK_PROXY_TOKEN=your-token \
+  -- node /path/to/mcp/index.js
+```
+
+Tools: `get_balance`, `get_info`, `get_transactions`, `get_deposit_address`, `get_fee_estimate`, `get_logs`, `create_invoice`, `create_spark_invoice`, `pay_invoice`, `transfer`.
 
 ## API routes
 
@@ -41,37 +62,11 @@ All routes require `Authorization: Bearer <token>` header.
 | POST | `/api/pay` | Pay a Lightning invoice |
 | POST | `/api/transfer` | Send sats to a Spark address |
 
-## Setup
+## Quick setup
 
-### Environment variables (Vercel)
+See the [deploy skill](skills/deploy/SKILL.md) for full step-by-step instructions, or the short version:
 
-```
-SPARK_MNEMONIC=<12-word BIP39 mnemonic>
-SPARK_NETWORK=MAINNET
-API_AUTH_TOKEN=<random token for authenticating requests>
-UPSTASH_REDIS_REST_URL=<your Upstash Redis URL>
-UPSTASH_REDIS_REST_TOKEN=<your Upstash Redis token>
-MAX_TRANSACTION_SATS=10000
-DAILY_BUDGET_SATS=100000
-```
-
-### Deploy
-
-```bash
-npm install
-npx vercel --prod
-```
-
-### MCP server (optional)
-
-For AI assistants that use the Model Context Protocol:
-
-```bash
-cd mcp && npm install
-claude mcp add spark-wallet \
-  -e SPARK_PROXY_URL=https://your-deployment.vercel.app \
-  -e SPARK_PROXY_TOKEN=your-token \
-  -- node /path/to/mcp/index.js
-```
-
-This exposes 10 tools: `get_balance`, `get_info`, `get_transactions`, `get_deposit_address`, `get_fee_estimate`, `get_logs`, `create_invoice`, `create_spark_invoice`, `pay_invoice`, `transfer`.
+1. Clone and `npm install`
+2. Create an Upstash Redis instance
+3. Set env vars on Vercel (`SPARK_MNEMONIC`, `API_AUTH_TOKEN`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, etc.)
+4. `npx vercel --prod`
