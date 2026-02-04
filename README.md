@@ -4,6 +4,18 @@ Serverless proxy for the [Spark](https://www.spark.info/) Bitcoin L2, designed t
 
 Deploys to Vercel. Includes an MCP server for Claude Code / MCP-compatible assistants.
 
+## vs [sparkbtcbot-skill](https://github.com/echennells/sparkbtcbot-skill)
+
+[sparkbtcbot-skill](https://github.com/echennells/sparkbtcbot-skill) gives an AI agent direct access to the Spark SDK — simpler to set up, no server needed, but the agent holds the mnemonic and has full control of the wallet.
+
+This proxy adds a layer between the agent and the wallet:
+
+- **Mnemonic stays on the server** — the agent only gets an API token
+- **Spending limits** — per-transaction and daily caps enforced server-side
+- **Activity logging** — all actions logged to Redis, queryable via API
+- **Invoice tracking** — lazy detection of paid Lightning invoices
+- **Shared access** — multiple agents or bots can use the same wallet through the API
+
 ## What it does
 
 - Wraps the `@buildonspark/spark-sdk` behind authenticated REST endpoints
