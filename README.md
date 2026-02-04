@@ -1,36 +1,65 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# sparkbtcbot-proxy
 
-## Getting Started
+Serverless proxy for the [Spark](https://www.spark.info/) Bitcoin L2, designed to give AI agents scoped access to a Spark wallet without exposing the mnemonic.
 
-First, run the development server:
+Deploys to Vercel. Includes an MCP server for Claude Code / MCP-compatible assistants.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## What it does
+
+- Wraps the `@buildonspark/spark-sdk` behind authenticated REST endpoints
+- Per-transaction and daily spending limits (configurable via env vars)
+- Logs all activity (invoices, payments, transfers, errors) to Redis
+- Lazy detection of paid Lightning invoices on each request
+- 1-hour default invoice expiry (configurable per-request)
+
+## API routes
+
+All routes require `Authorization: Bearer <token>` header.
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/api/balance` | Wallet balance (sats + tokens) |
+| GET | `/api/info` | Spark address and identity pubkey |
+| GET | `/api/transactions` | Transfer history (`?limit=&offset=`) |
+| GET | `/api/deposit-address` | Bitcoin L1 deposit address |
+| GET | `/api/fee-estimate` | Lightning send fee estimate (`?invoice=`) |
+| GET | `/api/logs` | Recent activity logs (`?limit=`) |
+| POST | `/api/invoice/create` | Create Lightning (BOLT11) invoice |
+| POST | `/api/invoice/spark` | Create Spark-native invoice |
+| POST | `/api/pay` | Pay a Lightning invoice |
+| POST | `/api/transfer` | Send sats to a Spark address |
+
+## Setup
+
+### Environment variables (Vercel)
+
+```
+SPARK_MNEMONIC=<12-word BIP39 mnemonic>
+SPARK_NETWORK=MAINNET
+API_AUTH_TOKEN=<random token for authenticating requests>
+UPSTASH_REDIS_REST_URL=<your Upstash Redis URL>
+UPSTASH_REDIS_REST_TOKEN=<your Upstash Redis token>
+MAX_TRANSACTION_SATS=10000
+DAILY_BUDGET_SATS=100000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Deploy
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm install
+npx vercel --prod
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### MCP server (optional)
 
-## Learn More
+For AI assistants that use the Model Context Protocol:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+cd mcp && npm install
+claude mcp add spark-wallet \
+  -e SPARK_PROXY_URL=https://your-deployment.vercel.app \
+  -e SPARK_PROXY_TOKEN=your-token \
+  -- node /path/to/mcp/index.js
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+This exposes 10 tools: `get_balance`, `get_info`, `get_transactions`, `get_deposit_address`, `get_fee_estimate`, `get_logs`, `create_invoice`, `create_spark_invoice`, `pay_invoice`, `transfer`.
