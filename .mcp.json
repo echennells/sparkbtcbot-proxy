@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "spark-wallet": {
+      "command": "node",
+      "args": ["/home/user/sparkbtcbot-proxy/mcp/index.js"],
+      "env": {
+        "SPARK_PROXY_URL": "https://sparkbtcbot-proxy.vercel.app",
+        "SPARK_PROXY_TOKEN": "it6wl1xMwrGJSR1NWRU3dvK+sU95BLngrf0BSM2t"
+      }
+    }
+  }
+}
