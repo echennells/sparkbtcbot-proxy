@@ -33,7 +33,7 @@ All routes require `Authorization: Bearer <token>`.
 
 There are two things in this repo:
 
-**To deploy the proxy**, see [`skills/deploy/SKILL.md`](skills/deploy/SKILL.md). This is a Claude Code skill you can give to an admin agent, or just follow the instructions yourself. Short version: clone, `npm install`, set env vars on Vercel, `npx vercel --prod`.
+**To deploy the proxy**, see [`skills/deploy/SKILL.md`](skills/deploy/SKILL.md). This is a Claude Code skill you can give to an admin agent, or just follow the instructions yourself. You'll need a [Vercel](https://vercel.com) account (free) and an [Upstash Redis](https://console.upstash.com) instance (free) for logging and budget tracking.
 
 **To connect an AI agent to an existing proxy**, install the MCP server:
 
