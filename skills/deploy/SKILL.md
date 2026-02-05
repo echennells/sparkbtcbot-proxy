@@ -37,11 +37,13 @@ npm install
 
 ### 2. Create Upstash Redis
 
-Create an Upstash API key at https://console.upstash.com/account/api, then create a database via the API:
+If the user already has `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`, skip to step 3.
+
+Otherwise, create a database via the Upstash API. The user needs their Upstash email and API key from https://console.upstash.com/account/api:
 
 ```bash
 curl -X POST "https://api.upstash.com/v2/redis/database" \
-  -u "EMAIL:API_KEY" \
+  -u "UPSTASH_EMAIL:UPSTASH_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name": "sparkbtcbot-proxy", "region": "global", "primary_region": "us-east-1"}'
 ```
@@ -85,6 +87,13 @@ When prompted, accept the defaults. Then set environment variables. All 7 are re
 | `UPSTASH_REDIS_REST_TOKEN` | Redis auth token | from step 2 |
 | `MAX_TRANSACTION_SATS` | Per-transaction spending cap | `10000` |
 | `DAILY_BUDGET_SATS` | Daily spending cap (resets midnight UTC) | `100000` |
+
+Optional (only needed if creating the Upstash database in step 2):
+
+| Variable | Description |
+|----------|-------------|
+| `UPSTASH_EMAIL` | Upstash account email |
+| `UPSTASH_API_KEY` | Upstash API key from https://console.upstash.com/account/api |
 
 **Important:** Do NOT use `vercel env add` with heredoc/`<<<` input — it appends newlines that break the Spark SDK. Either use the Vercel dashboard or the REST API:
 
