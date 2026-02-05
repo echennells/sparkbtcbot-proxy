@@ -6,7 +6,8 @@ You deploy it once on Vercel. Agents authenticate with a bearer token and hit RE
 
 ## Features
 
-- Bearer token auth
+- Role-based token auth (`admin` for full access, `invoice` for read + create invoices only)
+- Token management via API — create, list, revoke without redeploying
 - Per-transaction and daily spending limits
 - Activity logging to Redis (invoices, payments, transfers, errors)
 - Automatic detection of paid Lightning invoices
@@ -28,6 +29,9 @@ All routes require `Authorization: Bearer <token>`.
 | POST | `/api/invoice/spark` | Create Spark-native invoice |
 | POST | `/api/pay` | Pay a Lightning invoice |
 | POST | `/api/transfer` | Send sats to a Spark address |
+| GET | `/api/tokens` | List API tokens (admin only) |
+| POST | `/api/tokens` | Create a new token (admin only) |
+| DELETE | `/api/tokens` | Revoke a token (admin only) |
 
 ## Getting started
 

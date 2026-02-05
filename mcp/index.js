@@ -153,6 +153,49 @@ server.tool(
   }
 );
 
+// Token management (admin only)
+
+server.tool(
+  "create_token",
+  "Create a new API token with a specific role. Requires admin token.",
+  {
+    role: z.enum(["admin", "invoice"]).describe('Token role: "admin" (full access) or "invoice" (read + create invoices only)'),
+    label: z.string().describe("Label to identify this token (e.g. 'merchant-bot')"),
+  },
+  async ({ role, label }) => {
+    const result = await callApi("/api/tokens", {
+      method: "POST",
+      body: JSON.stringify({ role, label }),
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "list_tokens",
+  "List all API tokens (shows labels, roles, and prefixes — not full tokens). Requires admin token.",
+  {},
+  async () => {
+    const result = await callApi("/api/tokens");
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "revoke_token",
+  "Revoke an API token. Requires admin token.",
+  {
+    token: z.string().describe("The full token string to revoke"),
+  },
+  async ({ token }) => {
+    const result = await callApi("/api/tokens", {
+      method: "DELETE",
+      body: JSON.stringify({ token }),
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
 // Start server
 
 const transport = new StdioServerTransport();

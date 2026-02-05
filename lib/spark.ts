@@ -1,6 +1,6 @@
 import { SparkWallet } from "@buildonspark/spark-sdk";
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAuth } from "./auth";
+import { verifyAuth, type TokenRole } from "./auth";
 import { checkPendingInvoices } from "./log";
 import type { ApiResponse, ErrorCode } from "./types";
 
@@ -18,13 +18,17 @@ export function successResponse<T>(data: T): NextResponse<ApiResponse<T>> {
   return NextResponse.json({ success: true, data }, { status: 200 });
 }
 
-type HandlerFn = (wallet: InstanceType<typeof SparkWallet>) => Promise<NextResponse>;
+type HandlerFn = (
+  wallet: InstanceType<typeof SparkWallet>,
+  role: TokenRole
+) => Promise<NextResponse>;
 
 export async function withWallet(
   request: NextRequest,
   handler: HandlerFn
 ): Promise<NextResponse> {
-  if (!verifyAuth(request)) {
+  const role = await verifyAuth(request);
+  if (!role) {
     return errorResponse("Invalid or missing authorization token", "UNAUTHORIZED", 401);
   }
 
@@ -43,7 +47,7 @@ export async function withWallet(
     });
     wallet = result.wallet;
 
-    const response = await handler(wallet);
+    const response = await handler(wallet, role);
 
     // Lazy check for paid/expired invoices — fire-and-forget
     checkPendingInvoices(wallet).catch(() => {});

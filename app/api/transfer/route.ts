@@ -4,7 +4,11 @@ import { checkBudget, recordSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
 
 export async function POST(request: NextRequest) {
-  return withWallet(request, async (wallet) => {
+  return withWallet(request, async (wallet, role) => {
+    if (role !== "admin") {
+      return errorResponse("This token does not have permission to send transfers", "UNAUTHORIZED", 403);
+    }
+
     const body = await request.json();
     const { receiverSparkAddress, amountSats } = body;
 

@@ -11,7 +11,8 @@ You are an expert in deploying and managing the sparkbtcbot-proxy — a serverle
 ## What This Proxy Does
 
 Gives AI agents scoped wallet access without exposing the mnemonic:
-- Auth via bearer token
+- Role-based token auth (`admin` for full access, `invoice` for read + create invoices only)
+- Token management via API — create, list, revoke without redeploying
 - Per-transaction and daily spending caps
 - Activity logging to Redis
 - Lazy detection of paid Lightning invoices
@@ -79,7 +80,7 @@ When prompted, accept the defaults. Then set environment variables. All 7 are re
 |----------|-------------|---------|
 | `SPARK_MNEMONIC` | 12-word BIP39 mnemonic | `fence connect trigger ...` |
 | `SPARK_NETWORK` | Spark network | `MAINNET` |
-| `API_AUTH_TOKEN` | Bearer token for API auth | output of step 4 |
+| `API_AUTH_TOKEN` | Admin fallback bearer token | output of step 4 |
 | `UPSTASH_REDIS_REST_URL` | Redis REST endpoint | `https://xxx.upstash.io` |
 | `UPSTASH_REDIS_REST_TOKEN` | Redis auth token | from step 2 |
 | `MAX_TRANSACTION_SATS` | Per-transaction spending cap | `10000` |
@@ -108,7 +109,20 @@ curl -H "Authorization: Bearer <your-token>" https://<your-deployment>.vercel.ap
 
 Should return `{"success":true,"data":{"balance":"0","tokenBalances":{}}}`.
 
-### 7. Set up MCP server (optional)
+### 7. Create scoped tokens (optional)
+
+Use the admin token to create limited tokens for agents:
+
+```bash
+curl -X POST -H "Authorization: Bearer <admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"role": "invoice", "label": "my-agent"}' \
+  https://<your-deployment>.vercel.app/api/tokens
+```
+
+The response includes the full token string — save it, it's only shown once. See the **Token Roles** section below for details.
+
+### 8. Set up MCP server (optional)
 
 For Claude Code or MCP-compatible assistants:
 
@@ -150,17 +164,61 @@ If `claude mcp add` runs silently without creating a config, you can create the 
 | GET | `/api/logs` | Recent activity logs (`?limit=`) |
 | POST | `/api/invoice/create` | Create Lightning invoice (`{amountSats, memo?, expirySeconds?}`) |
 | POST | `/api/invoice/spark` | Create Spark invoice (`{amount?, memo?}`) |
-| POST | `/api/pay` | Pay Lightning invoice (`{invoice, maxFeeSats}`) |
-| POST | `/api/transfer` | Spark transfer (`{receiverSparkAddress, amountSats}`) |
+| POST | `/api/pay` | Pay Lightning invoice — admin only (`{invoice, maxFeeSats}`) |
+| POST | `/api/transfer` | Spark transfer — admin only (`{receiverSparkAddress, amountSats}`) |
+| GET | `/api/tokens` | List API tokens — admin only |
+| POST | `/api/tokens` | Create a new token — admin only (`{role, label}`) |
+| DELETE | `/api/tokens` | Revoke a token — admin only (`{token}`) |
+
+## Token Roles
+
+There are two token roles:
+
+| Role | Permissions |
+|------|------------|
+| `admin` | Everything — read, create invoices, pay, transfer, manage tokens |
+| `invoice` | Read (balance, info, transactions, logs, fee-estimate, deposit-address) + create invoices. Cannot pay or transfer. |
+
+The `API_AUTH_TOKEN` env var is a hardcoded admin fallback — it always works even if Redis is down or tokens get wiped. Use it to bootstrap: create scoped tokens via the API, then hand those out to agents.
+
+### Managing tokens
+
+Create an invoice-only token for a merchant bot:
+
+```bash
+curl -X POST -H "Authorization: Bearer <admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"role": "invoice", "label": "merchant-bot"}' \
+  https://<deployment>/api/tokens
+```
+
+List all tokens (shows prefixes, labels, roles — not full token strings):
+
+```bash
+curl -H "Authorization: Bearer <admin-token>" https://<deployment>/api/tokens
+```
+
+Revoke a token:
+
+```bash
+curl -X DELETE -H "Authorization: Bearer <admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"token": "<full-token-string>"}' \
+  https://<deployment>/api/tokens
+```
+
+Tokens are stored in Redis (hash `spark:tokens`). They survive redeploys but not Redis flushes.
 
 ## Common Operations
 
-### Rotate the API token
+### Rotate the admin fallback token
 
 1. Generate a new token: `openssl rand -base64 30`
 2. Update `API_AUTH_TOKEN` in Vercel env vars
 3. Redeploy: `npx vercel --prod`
 4. Update any MCP configs or agents using the old token
+
+Redis-stored tokens are not affected by this — they continue working.
 
 ### Adjust spending limits
 
@@ -175,6 +233,6 @@ curl -H "Authorization: Bearer <token>" https://<deployment>/api/logs?limit=20
 ## Architecture
 
 - **Vercel serverless functions** — each request spins up, initializes the Spark SDK (~1.5s), handles the request, and shuts down. No always-on process, no billing when idle.
-- **Upstash Redis** — stores daily spend counters, activity logs, and pending invoice tracking. Accessed over HTTP REST (no persistent connection needed). Free tier is limited to 1 database.
+- **Upstash Redis** — stores daily spend counters, activity logs, pending invoice tracking, and API tokens. Accessed over HTTP REST (no persistent connection needed). Free tier is limited to 1 database.
 - **Spark SDK** — `@buildonspark/spark-sdk` connects to Spark Signing Operators via gRPC over HTTP/2. Pure JavaScript, no native addons.
 - **Lazy invoice check** — on every request, the middleware checks Redis for pending invoices and compares against recent wallet transfers. Expired invoices are cleaned up, paid ones are logged. Max 5 checks per request, wrapped in try/catch so failures never affect the main request.
