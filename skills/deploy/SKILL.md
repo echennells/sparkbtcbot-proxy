@@ -18,12 +18,19 @@ Gives AI agents scoped wallet access without exposing the mnemonic:
 - Lazy detection of paid Lightning invoices
 - MCP server for Claude Code integration
 
-## Prerequisites
+## What You Need
 
-- Node.js 18+
-- A Vercel account (free Hobby tier works)
-- An Upstash account (free tier — limited to 1 database)
-- A BIP39 mnemonic for the Spark wallet
+**Ask the user for these upfront:**
+
+- Vercel account (free Hobby tier works)
+- Upstash account email and API key (from https://console.upstash.com/account/api) — OR existing `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` if they already have a database
+- BIP39 mnemonic for the Spark wallet (or generate one in step 3)
+- Node.js 20+
+
+**Generated during setup (don't ask for these):**
+
+- `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` — created by the Upstash management API in step 2
+- `API_AUTH_TOKEN` — generated in step 4
 
 ## Step-by-Step Deployment
 
@@ -87,13 +94,6 @@ When prompted, accept the defaults. Then set environment variables. All 7 are re
 | `UPSTASH_REDIS_REST_TOKEN` | Redis auth token | from step 2 |
 | `MAX_TRANSACTION_SATS` | Per-transaction spending cap | `10000` |
 | `DAILY_BUDGET_SATS` | Daily spending cap (resets midnight UTC) | `100000` |
-
-Optional (only needed if creating the Upstash database in step 2):
-
-| Variable | Description |
-|----------|-------------|
-| `UPSTASH_EMAIL` | Upstash account email |
-| `UPSTASH_API_KEY` | Upstash API key from https://console.upstash.com/account/api |
 
 **Important:** Do NOT use `vercel env add` with heredoc/`<<<` input — it appends newlines that break the Spark SDK. Either use the Vercel dashboard or the REST API:
 
