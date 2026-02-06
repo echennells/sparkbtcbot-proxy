@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
-import { checkBudget, recordSpend } from "@/lib/budget";
+import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
 
 export async function POST(request: NextRequest) {
@@ -19,14 +19,10 @@ export async function POST(request: NextRequest) {
       return errorResponse("amountSats must be a positive number", "BAD_REQUEST");
     }
 
-    const budgetCheck = await checkBudget(amountSats);
-    if (!budgetCheck.allowed) {
-      const maxTx = parseInt(process.env.MAX_TRANSACTION_SATS || "10000");
-      return errorResponse(
-        budgetCheck.reason!,
-        amountSats > maxTx ? "TRANSACTION_TOO_LARGE" : "BUDGET_EXCEEDED",
-        403
-      );
+    // Atomically check and reserve budget before transfer
+    const reserve = await reserveSpend(amountSats);
+    if (!reserve.allowed) {
+      return errorResponse(reserve.reason!, reserve.code!, 403);
     }
 
     let transfer;
@@ -36,6 +32,8 @@ export async function POST(request: NextRequest) {
         amountSats,
       });
     } catch (err) {
+      // Transfer failed — release the reserved budget
+      await releaseSpend(amountSats);
       await logEvent({
         action: "error",
         success: false,
@@ -45,14 +43,11 @@ export async function POST(request: NextRequest) {
       throw err;
     }
 
-    await Promise.all([
-      recordSpend(amountSats),
-      logEvent({
-        action: "transfer_sent",
-        success: true,
-        amountSats,
-      }),
-    ]);
+    await logEvent({
+      action: "transfer_sent",
+      success: true,
+      amountSats,
+    });
 
     return successResponse({
       id: transfer.id,

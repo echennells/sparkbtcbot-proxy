@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
-import { checkBudget, recordSpend } from "@/lib/budget";
+import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
 
 export async function POST(request: NextRequest) {
@@ -19,10 +19,6 @@ export async function POST(request: NextRequest) {
       return errorResponse("maxFeeSats is required", "BAD_REQUEST");
     }
 
-    // Estimate total cost: invoice amount + fees
-    // Use fee estimate as a proxy for total spend since decoding BOLT11
-    // amounts requires an external lib. The caller knows the invoice amount
-    // and should set maxFeeSats accordingly.
     let feeEstimate = maxFeeSats;
     try {
       feeEstimate = await wallet.getLightningSendFeeEstimate({
@@ -32,18 +28,12 @@ export async function POST(request: NextRequest) {
       // Fall back to maxFeeSats if estimate fails
     }
 
-    // For budget purposes, use maxFeeSats + feeEstimate as upper bound
-    // This is conservative — actual spend may be less
     const estimatedTotal = maxFeeSats + feeEstimate;
 
-    const budgetCheck = await checkBudget(estimatedTotal);
-    if (!budgetCheck.allowed) {
-      const maxTx = parseInt(process.env.MAX_TRANSACTION_SATS || "10000");
-      return errorResponse(
-        budgetCheck.reason!,
-        estimatedTotal > maxTx ? "TRANSACTION_TOO_LARGE" : "BUDGET_EXCEEDED",
-        403
-      );
+    // Atomically check and reserve budget before payment
+    const reserve = await reserveSpend(estimatedTotal);
+    if (!reserve.allowed) {
+      return errorResponse(reserve.reason!, reserve.code!, 403);
     }
 
     let result;
@@ -53,6 +43,8 @@ export async function POST(request: NextRequest) {
         maxFeeSats,
       });
     } catch (err) {
+      // Payment failed — release the reserved budget
+      await releaseSpend(estimatedTotal);
       await logEvent({
         action: "error",
         success: false,
@@ -62,14 +54,11 @@ export async function POST(request: NextRequest) {
       throw err;
     }
 
-    await Promise.all([
-      recordSpend(estimatedTotal),
-      logEvent({
-        action: "payment_sent",
-        success: true,
-        invoice: invoice.slice(0, 30),
-      }),
-    ]);
+    await logEvent({
+      action: "payment_sent",
+      success: true,
+      invoice: invoice.slice(0, 30),
+    });
 
     return successResponse(result);
   });
