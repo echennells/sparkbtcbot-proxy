@@ -3,7 +3,7 @@ import { withWallet, successResponse } from "@/lib/spark";
 import { logEvent } from "@/lib/log";
 
 export async function POST(request: NextRequest) {
-  return withWallet(request, async (wallet) => {
+  return withWallet(request, async (wallet, _auth) => {
     const body = await request.json();
     const { amount, memo } = body;
 

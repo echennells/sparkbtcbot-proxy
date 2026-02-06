@@ -5,7 +5,7 @@ import { logEvent, trackPendingInvoice } from "@/lib/log";
 const DEFAULT_EXPIRY_SECONDS = 3600; // 1 hour
 
 export async function POST(request: NextRequest) {
-  return withWallet(request, async (wallet) => {
+  return withWallet(request, async (wallet, _auth) => {
     const body = await request.json();
     const { amountSats, memo } = body;
     const expirySeconds = body.expirySeconds || DEFAULT_EXPIRY_SECONDS;

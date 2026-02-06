@@ -3,8 +3,8 @@ import { verifyAuth } from "@/lib/auth";
 import { getRecentLogs } from "@/lib/log";
 
 export async function GET(request: NextRequest) {
-  const role = await verifyAuth(request);
-  if (!role) {
+  const auth = await verifyAuth(request);
+  if (!auth) {
     return NextResponse.json(
       { success: false, error: "Invalid or missing authorization token", code: "UNAUTHORIZED" },
       { status: 401 }

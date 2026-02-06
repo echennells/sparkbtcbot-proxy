@@ -4,6 +4,21 @@ import { Redis } from "@upstash/redis";
 
 export type TokenRole = "admin" | "invoice";
 
+export interface TokenData {
+  role: TokenRole;
+  label: string;
+  createdAt: string;
+  maxTxSats?: number;
+  dailyBudgetSats?: number;
+}
+
+export interface AuthResult {
+  role: TokenRole;
+  tokenId: string; // The token string (for per-token budget tracking)
+  maxTxSats: number;
+  dailyBudgetSats: number;
+}
+
 let _redis: Redis | null = null;
 
 function getRedis(): Redis {
@@ -23,31 +38,47 @@ function safeCompare(a: string, b: string): boolean {
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
+function getDefaultLimits() {
+  return {
+    maxTxSats: parseInt(process.env.MAX_TRANSACTION_SATS || "10000"),
+    dailyBudgetSats: parseInt(process.env.DAILY_BUDGET_SATS || "100000"),
+  };
+}
+
 export async function verifyAuth(
   request: NextRequest
-): Promise<TokenRole | null> {
+): Promise<AuthResult | null> {
   const authHeader = request.headers.get("authorization");
   if (!authHeader) return null;
 
   const token = authHeader.replace("Bearer ", "");
   if (!token) return null;
 
+  const defaults = getDefaultLimits();
+
   // Check hardcoded admin token first (fallback — always works even if Redis is down)
   const envToken = process.env.API_AUTH_TOKEN;
   if (envToken && safeCompare(token, envToken)) {
-    return "admin";
+    return {
+      role: "admin",
+      tokenId: "env",
+      ...defaults,
+    };
   }
 
   // Check Redis-stored tokens
   try {
     const raw = await getRedis().hget(TOKENS_KEY, token);
     if (raw) {
-      const data =
-        typeof raw === "string"
-          ? JSON.parse(raw)
-          : (raw as { role: TokenRole });
+      const data: TokenData =
+        typeof raw === "string" ? JSON.parse(raw) : (raw as TokenData);
       if (data.role === "admin" || data.role === "invoice") {
-        return data.role;
+        return {
+          role: data.role,
+          tokenId: token.slice(0, 16), // Use prefix for budget key (shorter, safer)
+          maxTxSats: data.maxTxSats ?? defaults.maxTxSats,
+          dailyBudgetSats: data.dailyBudgetSats ?? defaults.dailyBudgetSats,
+        };
       }
     }
   } catch {
@@ -57,36 +88,54 @@ export async function verifyAuth(
   return null;
 }
 
-export async function createToken(
-  role: TokenRole,
-  label: string
-): Promise<string> {
+export interface CreateTokenOptions {
+  role: TokenRole;
+  label: string;
+  maxTxSats?: number;
+  dailyBudgetSats?: number;
+}
+
+export async function createToken(options: CreateTokenOptions): Promise<string> {
   const token = randomBytes(30).toString("base64");
+  const data: TokenData = {
+    role: options.role,
+    label: options.label,
+    createdAt: new Date().toISOString(),
+  };
+  if (options.maxTxSats !== undefined) {
+    data.maxTxSats = options.maxTxSats;
+  }
+  if (options.dailyBudgetSats !== undefined) {
+    data.dailyBudgetSats = options.dailyBudgetSats;
+  }
   await getRedis().hset(TOKENS_KEY, {
-    [token]: JSON.stringify({
-      role,
-      label,
-      createdAt: new Date().toISOString(),
-    }),
+    [token]: JSON.stringify(data),
   });
   return token;
 }
 
-export async function listTokens(): Promise<
-  { label: string; role: TokenRole; createdAt: string; tokenPrefix: string }[]
-> {
+export interface TokenInfo {
+  tokenPrefix: string;
+  label: string;
+  role: TokenRole;
+  createdAt: string;
+  maxTxSats?: number;
+  dailyBudgetSats?: number;
+}
+
+export async function listTokens(): Promise<TokenInfo[]> {
   const all = await getRedis().hgetall(TOKENS_KEY);
   if (!all) return [];
   return Object.entries(all).map(([token, raw]) => {
-    const data =
-      typeof raw === "string"
-        ? JSON.parse(raw)
-        : (raw as { role: TokenRole; label: string; createdAt: string });
+    const data: TokenData =
+      typeof raw === "string" ? JSON.parse(raw) : (raw as TokenData);
     return {
       tokenPrefix: token.slice(0, 8) + "...",
       label: data.label,
       role: data.role,
       createdAt: data.createdAt,
+      maxTxSats: data.maxTxSats,
+      dailyBudgetSats: data.dailyBudgetSats,
     };
   });
 }

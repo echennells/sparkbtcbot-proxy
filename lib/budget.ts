@@ -12,13 +12,13 @@ function getRedis(): Redis {
   return _redis;
 }
 
-function getTodayKey(): string {
+function getTodayKey(tokenId: string): string {
   const today = new Date().toISOString().split("T")[0];
-  return `spark:daily_spend:${today}`;
+  return `spark:daily_spend:${tokenId}:${today}`;
 }
 
 // Lua script: atomically check budget and increment if allowed.
-// Returns [1, newTotal] on success, [0, currentSpend] if over budget.
+// Returns [1, newTotal, 0] on success, [0, currentSpend, reason] if rejected.
 const RESERVE_SCRIPT = `
 local key = KEYS[1]
 local amount = tonumber(ARGV[1])
@@ -48,49 +48,61 @@ export type ReserveResult = {
   code?: "TRANSACTION_TOO_LARGE" | "BUDGET_EXCEEDED";
 };
 
-export async function reserveSpend(amountSats: number): Promise<ReserveResult> {
-  const maxTx = parseInt(process.env.MAX_TRANSACTION_SATS || "10000");
-  const dailyBudget = parseInt(process.env.DAILY_BUDGET_SATS || "100000");
-  const key = getTodayKey();
+export interface BudgetParams {
+  tokenId: string;
+  maxTxSats: number;
+  dailyBudgetSats: number;
+}
 
-  const result = await getRedis().eval(
-    RESERVE_SCRIPT,
-    [key],
-    [amountSats, maxTx, dailyBudget, 86400 * 2]
-  ) as number[];
+export async function reserveSpend(
+  amountSats: number,
+  params: BudgetParams
+): Promise<ReserveResult> {
+  const { tokenId, maxTxSats, dailyBudgetSats } = params;
+  const key = getTodayKey(tokenId);
+
+  const result = (await getRedis().eval(RESERVE_SCRIPT, [key], [
+    amountSats,
+    maxTxSats,
+    dailyBudgetSats,
+    86400 * 2,
+  ])) as number[];
 
   const [ok, spent, reason] = result;
 
   if (ok === 1) {
-    return { allowed: true, dailySpent: spent, dailyLimit: dailyBudget };
+    return { allowed: true, dailySpent: spent, dailyLimit: dailyBudgetSats };
   }
 
   if (reason === 1) {
     return {
       allowed: false,
-      reason: `Transaction amount ${amountSats} exceeds per-transaction limit of ${maxTx} sats`,
+      reason: `Transaction amount ${amountSats} exceeds per-transaction limit of ${maxTxSats} sats`,
       dailySpent: spent,
-      dailyLimit: dailyBudget,
+      dailyLimit: dailyBudgetSats,
       code: "TRANSACTION_TOO_LARGE",
     };
   }
 
   return {
     allowed: false,
-    reason: `Would exceed daily budget. Spent: ${spent}, Requested: ${amountSats}, Limit: ${dailyBudget}`,
+    reason: `Would exceed daily budget. Spent: ${spent}, Requested: ${amountSats}, Limit: ${dailyBudgetSats}`,
     dailySpent: spent,
-    dailyLimit: dailyBudget,
+    dailyLimit: dailyBudgetSats,
     code: "BUDGET_EXCEEDED",
   };
 }
 
 // Compensating decrement if payment fails after reservation.
-export async function releaseSpend(amountSats: number): Promise<void> {
-  const key = getTodayKey();
+export async function releaseSpend(
+  amountSats: number,
+  tokenId: string
+): Promise<void> {
+  const key = getTodayKey(tokenId);
   await getRedis().decrby(key, amountSats);
 }
 
-export async function getDailySpend(): Promise<number> {
-  const key = getTodayKey();
+export async function getDailySpend(tokenId: string): Promise<number> {
+  const key = getTodayKey(tokenId);
   return (await getRedis().get<number>(key)) || 0;
 }

@@ -26,24 +26,24 @@ async function callApi(path, options = {}) {
 }
 
 const server = new McpServer({
-  name: "spark-mcp",
+  name: "spark-proxy",
   version: "1.0.0",
 });
 
 // Read-only tools
 
-server.tool("get_balance", "Get wallet balance in sats and tokens", {}, async () => {
+server.tool("spark_proxy_get_balance", "Get wallet balance in sats and tokens", {}, async () => {
   const result = await callApi("/api/balance");
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 });
 
-server.tool("get_info", "Get wallet Spark address and identity public key", {}, async () => {
+server.tool("spark_proxy_get_info", "Get wallet Spark address and identity public key", {}, async () => {
   const result = await callApi("/api/info");
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 });
 
 server.tool(
-  "get_transactions",
+  "spark_proxy_get_transactions",
   "Get transfer history",
   {
     limit: z.number().optional().default(20).describe("Max number of transfers to return"),
@@ -55,13 +55,13 @@ server.tool(
   }
 );
 
-server.tool("get_deposit_address", "Get a single-use Bitcoin deposit address (L1 → Spark)", {}, async () => {
+server.tool("spark_proxy_get_deposit_address", "Get a single-use Bitcoin deposit address (L1 → Spark)", {}, async () => {
   const result = await callApi("/api/deposit-address");
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 });
 
 server.tool(
-  "get_fee_estimate",
+  "spark_proxy_get_fee_estimate",
   "Estimate the fee for paying a Lightning invoice",
   {
     invoice: z.string().describe("BOLT11 Lightning invoice to estimate fees for"),
@@ -75,7 +75,7 @@ server.tool(
 // Receive tools
 
 server.tool(
-  "create_invoice",
+  "spark_proxy_create_invoice",
   "Create a Lightning (BOLT11) invoice to receive payment",
   {
     amountSats: z.number().positive().describe("Amount in sats"),
@@ -92,7 +92,7 @@ server.tool(
 );
 
 server.tool(
-  "create_spark_invoice",
+  "spark_proxy_create_native_invoice",
   "Create a Spark native invoice (only payable by other Spark wallets)",
   {
     amount: z.number().optional().describe("Amount in sats"),
@@ -110,7 +110,7 @@ server.tool(
 // Send tools (spending controls enforced by middleware)
 
 server.tool(
-  "pay_invoice",
+  "spark_proxy_pay_invoice",
   "Pay a Lightning (BOLT11) invoice. Subject to per-transaction and daily spending limits.",
   {
     invoice: z.string().describe("BOLT11 Lightning invoice to pay"),
@@ -126,7 +126,7 @@ server.tool(
 );
 
 server.tool(
-  "transfer",
+  "spark_proxy_transfer",
   "Send sats to another Spark wallet. Zero fee, instant. Subject to per-transaction and daily spending limits.",
   {
     receiverSparkAddress: z.string().describe("Recipient's Spark address (sp1p...)"),
@@ -142,7 +142,7 @@ server.tool(
 );
 
 server.tool(
-  "get_logs",
+  "spark_proxy_get_logs",
   "Get recent activity logs (invoices, payments, transfers, errors)",
   {
     limit: z.number().optional().default(50).describe("Max number of log entries to return (max 200)"),
@@ -156,23 +156,25 @@ server.tool(
 // Token management (admin only)
 
 server.tool(
-  "create_token",
-  "Create a new API token with a specific role. Requires admin token.",
+  "spark_proxy_create_token",
+  "Create a new API token with a specific role and optional spending limits. Requires admin token.",
   {
     role: z.enum(["admin", "invoice"]).describe('Token role: "admin" (full access) or "invoice" (read + create invoices only)'),
     label: z.string().describe("Label to identify this token (e.g. 'merchant-bot')"),
+    maxTxSats: z.number().positive().optional().describe("Per-transaction spending limit in sats (defaults to env var)"),
+    dailyBudgetSats: z.number().positive().optional().describe("Daily spending limit in sats (defaults to env var)"),
   },
-  async ({ role, label }) => {
+  async ({ role, label, maxTxSats, dailyBudgetSats }) => {
     const result = await callApi("/api/tokens", {
       method: "POST",
-      body: JSON.stringify({ role, label }),
+      body: JSON.stringify({ role, label, maxTxSats, dailyBudgetSats }),
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
 
 server.tool(
-  "list_tokens",
+  "spark_proxy_list_tokens",
   "List all API tokens (shows labels, roles, and prefixes — not full tokens). Requires admin token.",
   {},
   async () => {
@@ -182,7 +184,7 @@ server.tool(
 );
 
 server.tool(
-  "revoke_token",
+  "spark_proxy_revoke_token",
   "Revoke an API token. Requires admin token.",
   {
     token: z.string().describe("The full token string to revoke"),
@@ -191,6 +193,27 @@ server.tool(
     const result = await callApi("/api/tokens", {
       method: "DELETE",
       body: JSON.stringify({ token }),
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+// L402 (pay-per-request)
+
+server.tool(
+  "spark_proxy_l402_fetch",
+  "Fetch a URL with L402 support. If the endpoint returns 402 Payment Required, automatically pays the Lightning invoice and retries with the L402 credential.",
+  {
+    url: z.string().describe("URL to fetch"),
+    method: z.enum(["GET", "POST", "PUT", "DELETE"]).optional().default("GET").describe("HTTP method"),
+    headers: z.record(z.string()).optional().describe("Additional headers to send"),
+    body: z.any().optional().describe("Request body (for POST/PUT)"),
+    maxFeeSats: z.number().optional().default(10).describe("Maximum fee in sats for the Lightning payment"),
+  },
+  async ({ url, method, headers, body, maxFeeSats }) => {
+    const result = await callApi("/api/l402", {
+      method: "POST",
+      body: JSON.stringify({ url, method, headers, body, maxFeeSats }),
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }

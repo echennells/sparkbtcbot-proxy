@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 
 export async function GET(request: NextRequest) {
-  return withWallet(request, async (wallet) => {
+  return withWallet(request, async (wallet, _auth) => {
     const { searchParams } = new URL(request.url);
     const invoice = searchParams.get("invoice");
 

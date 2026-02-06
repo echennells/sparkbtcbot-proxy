@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { withWallet, successResponse } from "@/lib/spark";
 
 export async function GET(request: NextRequest) {
-  return withWallet(request, async (wallet) => {
+  return withWallet(request, async (wallet, _auth) => {
     const { searchParams } = new URL(request.url);
     const limit = parseInt(searchParams.get("limit") || "20");
     const offset = parseInt(searchParams.get("offset") || "0");

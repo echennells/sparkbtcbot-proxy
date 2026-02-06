@@ -4,8 +4,8 @@ import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
 
 export async function POST(request: NextRequest) {
-  return withWallet(request, async (wallet, role) => {
-    if (role !== "admin") {
+  return withWallet(request, async (wallet, auth) => {
+    if (auth.role !== "admin") {
       return errorResponse("This token does not have permission to send transfers", "UNAUTHORIZED", 403);
     }
 
@@ -20,7 +20,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Atomically check and reserve budget before transfer
-    const reserve = await reserveSpend(amountSats);
+    const reserve = await reserveSpend(amountSats, {
+      tokenId: auth.tokenId,
+      maxTxSats: auth.maxTxSats,
+      dailyBudgetSats: auth.dailyBudgetSats,
+    });
     if (!reserve.allowed) {
       return errorResponse(reserve.reason!, reserve.code!, 403);
     }
@@ -33,7 +37,7 @@ export async function POST(request: NextRequest) {
       });
     } catch (err) {
       // Transfer failed — release the reserved budget
-      await releaseSpend(amountSats);
+      await releaseSpend(amountSats, auth.tokenId);
       await logEvent({
         action: "error",
         success: false,
