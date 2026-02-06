@@ -2,11 +2,40 @@ import { NextRequest } from "next/server";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
+import { SparkWallet } from "@buildonspark/spark-sdk";
 
 interface L402Challenge {
   invoice: string;
   macaroon: string;
   priceSats?: number;
+}
+
+const MAX_POLL_ATTEMPTS = 15;
+const POLL_INTERVAL_MS = 500;
+
+async function waitForPreimage(
+  wallet: SparkWallet,
+  requestId: string
+): Promise<{ preimage: string } | { error: string }> {
+  for (let i = 0; i < MAX_POLL_ATTEMPTS; i++) {
+    const request = await wallet.getLightningSendRequest(requestId);
+    if (!request) {
+      return { error: "Payment request not found" };
+    }
+
+    if (request.status === "LIGHTNING_PAYMENT_SUCCEEDED" && request.paymentPreimage) {
+      return { preimage: request.paymentPreimage };
+    }
+
+    if (request.status === "LIGHTNING_PAYMENT_FAILED" || request.status === "USER_TRANSFER_VALIDATION_FAILED") {
+      return { error: `Payment failed with status: ${request.status}` };
+    }
+
+    // Still pending, wait and retry
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+
+  return { error: "Timeout waiting for payment to complete" };
 }
 
 function parseL402Response(body: unknown): L402Challenge | null {
@@ -134,18 +163,32 @@ export async function POST(request: NextRequest) {
     }
 
     // paymentResult can be LightningSendRequest or WalletTransfer
-    // LightningSendRequest has paymentPreimage, WalletTransfer does not
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const paymentResultAny = paymentResult as any;
-    const preimage = paymentResultAny.paymentPreimage as string | undefined;
+    let preimage = paymentResultAny.paymentPreimage as string | undefined;
+    const requestId = paymentResultAny.id as string | undefined;
     const status = paymentResultAny.status as string | undefined;
 
+    // If payment initiated but no preimage yet, poll for completion
+    if (!preimage && status === "LIGHTNING_PAYMENT_INITIATED" && requestId) {
+      const pollResult = await waitForPreimage(wallet, requestId);
+      if ("error" in pollResult) {
+        await releaseSpend(estimatedTotal, auth.tokenId);
+        await logEvent({
+          action: "error",
+          success: false,
+          invoice: challenge.invoice.slice(0, 30),
+          error: pollResult.error,
+        });
+        return errorResponse(pollResult.error, "L402_PAYMENT_FAILED");
+      }
+      preimage = pollResult.preimage;
+    }
+
     if (!preimage) {
-      // Log for debugging - payment succeeded but no preimage
-      console.error("[L402] Payment result:", JSON.stringify(paymentResult));
       await releaseSpend(estimatedTotal, auth.tokenId);
       return errorResponse(
-        `Payment succeeded but no preimage returned. Status: ${status || "unknown"}`,
+        `Payment completed but no preimage available. Status: ${status || "unknown"}`,
         "L402_NO_PREIMAGE"
       );
     }
