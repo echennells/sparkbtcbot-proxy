@@ -198,27 +198,6 @@ server.tool(
   }
 );
 
-// L402 (pay-per-request)
-
-server.tool(
-  "spark_proxy_l402_fetch",
-  "Fetch a URL with L402 support. If the endpoint returns 402 Payment Required, automatically pays the Lightning invoice and retries with the L402 credential.",
-  {
-    url: z.string().describe("URL to fetch"),
-    method: z.enum(["GET", "POST", "PUT", "DELETE"]).optional().default("GET").describe("HTTP method"),
-    headers: z.record(z.string()).optional().describe("Additional headers to send"),
-    body: z.any().optional().describe("Request body (for POST/PUT)"),
-    maxFeeSats: z.number().optional().default(10).describe("Maximum fee in sats for the Lightning payment"),
-  },
-  async ({ url, method, headers, body, maxFeeSats }) => {
-    const result = await callApi("/api/l402", {
-      method: "POST",
-      body: JSON.stringify({ url, method, headers, body, maxFeeSats }),
-    });
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-  }
-);
-
 // Start server
 
 const transport = new StdioServerTransport();
