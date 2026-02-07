@@ -2,7 +2,7 @@
 
 A serverless proxy that lets AI agents use a [Spark](https://www.spark.info/) Bitcoin L2 wallet over HTTP, without touching the private key.
 
-You deploy it once on Vercel. Agents authenticate with a bearer token and hit REST endpoints to check balances, send payments, create invoices, etc. The mnemonic never leaves the server.
+You deploy it once on Vercel with Upstash Redis for state. Agents authenticate with a bearer token and hit REST endpoints to check balances, send payments, create invoices, etc. The mnemonic never leaves the server.
 
 ## Features
 
@@ -32,6 +32,17 @@ All routes require `Authorization: Bearer <token>`.
 | GET | `/api/tokens` | List API tokens (admin only) |
 | POST | `/api/tokens` | Create a new token (admin only) |
 | DELETE | `/api/tokens` | Revoke a token (admin only) |
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SPARK_WALLET_MNEMONIC` | Yes | 12-word BIP39 mnemonic for the Spark wallet |
+| `API_AUTH_TOKEN` | Yes | Admin fallback token (can create more via API) |
+| `UPSTASH_REDIS_REST_URL` | Yes | Upstash Redis REST URL |
+| `UPSTASH_REDIS_REST_TOKEN` | Yes | Upstash Redis REST token |
+| `MAX_TRANSACTION_SATS` | No | Per-tx spending limit (default: 1000) |
+| `DAILY_BUDGET_SATS` | No | Daily spending limit (default: 10000) |
 
 ## Getting started
 
