@@ -46,21 +46,14 @@ All routes require `Authorization: Bearer <token>`.
 
 ## Getting started
 
-There are two things in this repo:
+See [`skills/deploy/SKILL.md`](skills/deploy/SKILL.md) for deployment instructions. This is a Claude Code skill you can give to an admin agent, or just follow the instructions yourself. You'll need a [Vercel](https://vercel.com) account (free) and an [Upstash Redis](https://console.upstash.com) instance (free).
 
-**To deploy the proxy**, see [`skills/deploy/SKILL.md`](skills/deploy/SKILL.md). This is a Claude Code skill you can give to an admin agent, or just follow the instructions yourself. You'll need a [Vercel](https://vercel.com) account (free) and an [Upstash Redis](https://console.upstash.com) instance (free) for logging and budget tracking.
-
-**To connect an AI agent to an existing proxy**, install the MCP server:
+Once deployed, hit the API with any HTTP client:
 
 ```bash
-cd mcp && npm install
-claude mcp add spark-wallet \
-  -e SPARK_PROXY_URL=https://your-deployment.vercel.app \
-  -e SPARK_PROXY_TOKEN=your-token \
-  -- node /path/to/mcp/index.js
+curl https://your-deployment.vercel.app/api/balance \
+  -H "Authorization: Bearer your-token"
 ```
-
-Or just hit the API directly with HTTP — no MCP required.
 
 ## See also
 

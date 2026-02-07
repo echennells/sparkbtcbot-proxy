@@ -16,7 +16,6 @@ Gives AI agents scoped wallet access without exposing the mnemonic:
 - Per-transaction and daily spending caps
 - Activity logging to Redis
 - Lazy detection of paid Lightning invoices
-- MCP server for Claude Code integration
 
 ## What You Need
 
@@ -131,36 +130,6 @@ curl -X POST -H "Authorization: Bearer <admin-token>" \
 
 The response includes the full token string — save it, it's only shown once. See the **Token Roles** section below for details.
 
-### 8. Set up MCP server (optional)
-
-For Claude Code or MCP-compatible assistants:
-
-```bash
-cd mcp && npm install
-claude mcp add spark-wallet \
-  -e SPARK_PROXY_URL=https://<your-deployment>.vercel.app \
-  -e SPARK_PROXY_TOKEN=<your-token> \
-  -- node /path/to/sparkbtcbot-proxy/mcp/index.js
-```
-
-If `claude mcp add` runs silently without creating a config, you can create the `.mcp.json` file directly in your project root:
-
-```json
-{
-  "mcpServers": {
-    "spark-wallet": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["/path/to/sparkbtcbot-proxy/mcp/index.js"],
-      "env": {
-        "SPARK_PROXY_URL": "https://<your-deployment>.vercel.app",
-        "SPARK_PROXY_TOKEN": "<your-token>"
-      }
-    }
-  }
-}
-```
-
 ## API Routes
 
 | Method | Route | Description |
@@ -225,7 +194,7 @@ Tokens are stored in Redis (hash `spark:tokens`). They survive redeploys but not
 1. Generate a new token: `openssl rand -base64 30`
 2. Update `API_AUTH_TOKEN` in Vercel env vars
 3. Redeploy: `npx vercel --prod`
-4. Update any MCP configs or agents using the old token
+4. Update any agents using the old token
 
 Redis-stored tokens are not affected by this — they continue working.
 
