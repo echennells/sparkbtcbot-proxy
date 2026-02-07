@@ -1,60 +1,95 @@
 # sparkbtcbot-proxy
 
-A serverless proxy that lets AI agents use a [Spark](https://www.spark.info/) Bitcoin L2 wallet over HTTP, without touching the private key.
+A serverless proxy that lets AI agents use a [Spark](https://www.spark.info/) Bitcoin L2 wallet over HTTP, without exposing the private key.
 
-You deploy it once on Vercel with Upstash Redis for state. Agents authenticate with a bearer token and hit REST endpoints to check balances, send payments, create invoices, etc. The mnemonic never leaves the server.
+[Spark](https://www.spark.info/) is a Bitcoin L2 with instant payments and sub-satoshi fees. This proxy wraps the Spark SDK behind authenticated REST endpoints so agents can check balances, send payments, and create invoices — while you keep the mnemonic safe on the server.
 
-## Features
+## Why use this?
 
-- Role-based token auth (`admin` for full access, `invoice` for read + create invoices only)
-- Token management via API — create, list, revoke without redeploying
-- Per-transaction and daily spending limits
-- Activity logging to Redis (invoices, payments, transfers, errors)
-- Automatic detection of paid Lightning invoices
-- 1-hour default invoice expiry (configurable)
+If you give an agent direct SDK access ([sparkbtcbot-skill](https://github.com/echennells/sparkbtcbot-skill)), the agent holds your mnemonic. That's fine for testing, but risky in production.
+
+This proxy solves that:
+
+- **Mnemonic stays on server** — agents get bearer tokens, not keys
+- **Spending limits** — cap per-transaction and daily spend (global or per-token)
+- **Revocable access** — cut off a compromised agent without moving funds
+- **Role-based auth** — give agents invoice-only access if they don't need to spend
+
+## Token roles
+
+| Role | Permissions |
+|------|-------------|
+| `admin` | Full access: read, create invoices, pay, transfer, manage tokens |
+| `invoice` | Read-only + create invoices. Cannot pay or transfer. |
+
+The `API_AUTH_TOKEN` env var is a hardcoded admin fallback — it always works even if Redis is down. Use it to bootstrap: create scoped tokens via the API, then hand those to agents.
 
 ## API
 
 All routes require `Authorization: Bearer <token>`.
 
-| Method | Route | Description |
-|--------|-------|-------------|
-| GET | `/api/balance` | Wallet balance (sats + tokens) |
-| GET | `/api/info` | Spark address and identity pubkey |
-| GET | `/api/transactions` | Transfer history (`?limit=&offset=`) |
-| GET | `/api/deposit-address` | Bitcoin L1 deposit address |
-| GET | `/api/fee-estimate` | Lightning send fee estimate (`?invoice=`) |
-| GET | `/api/logs` | Recent activity logs (`?limit=`) |
-| POST | `/api/invoice/create` | Create Lightning (BOLT11) invoice |
-| POST | `/api/invoice/spark` | Create Spark-native invoice |
-| POST | `/api/pay` | Pay a Lightning invoice |
-| POST | `/api/transfer` | Send sats to a Spark address |
-| GET | `/api/tokens` | List API tokens (admin only) |
-| POST | `/api/tokens` | Create a new token (admin only) |
-| DELETE | `/api/tokens` | Revoke a token (admin only) |
+| Method | Route | Description | Body |
+|--------|-------|-------------|------|
+| GET | `/api/balance` | Wallet balance (sats + tokens) | — |
+| GET | `/api/info` | Spark address and pubkey | — |
+| GET | `/api/transactions` | Transfer history | `?limit=&offset=` |
+| GET | `/api/deposit-address` | Bitcoin L1 deposit address | — |
+| GET | `/api/fee-estimate` | Lightning fee estimate | `?invoice=<bolt11>` |
+| GET | `/api/logs` | Activity logs | `?limit=` |
+| POST | `/api/invoice/create` | Create BOLT11 invoice | `{amountSats, memo?, expirySeconds?}` |
+| POST | `/api/invoice/spark` | Create Spark invoice | `{amount?, memo?}` |
+| POST | `/api/pay` | Pay Lightning invoice | `{invoice, maxFeeSats}` |
+| POST | `/api/transfer` | Send to Spark address | `{receiverSparkAddress, amountSats}` |
+| GET | `/api/tokens` | List tokens | — |
+| POST | `/api/tokens` | Create token | `{role, label, maxTxSats?, dailyBudgetSats?}` |
+| DELETE | `/api/tokens` | Revoke token | `{token}` |
 
-## Environment Variables
+**Notes:**
+- `POST /api/pay` and `POST /api/transfer` require an `admin` token
+- Token management routes (`/api/tokens`) require an `admin` token
+- All other routes work with either role
+
+### Example: create an invoice
+
+```bash
+curl -X POST https://your-deployment.vercel.app/api/invoice/create \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"amountSats": 1000, "memo": "Test invoice"}'
+```
+
+Returns:
+```json
+{"success": true, "data": {"encodedInvoice": "lnbc10u1p..."}}
+```
+
+## Environment variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `SPARK_WALLET_MNEMONIC` | Yes | 12-word BIP39 mnemonic for the Spark wallet |
-| `API_AUTH_TOKEN` | Yes | Admin fallback token (can create more via API) |
-| `UPSTASH_REDIS_REST_URL` | Yes | Upstash Redis REST URL |
-| `UPSTASH_REDIS_REST_TOKEN` | Yes | Upstash Redis REST token |
-| `MAX_TRANSACTION_SATS` | No | Per-tx spending limit (default: 1000) |
-| `DAILY_BUDGET_SATS` | No | Daily spending limit (default: 10000) |
+| `SPARK_MNEMONIC` | Yes | 12-word BIP39 mnemonic for the Spark wallet |
+| `SPARK_NETWORK` | Yes | `MAINNET` or `TESTNET` |
+| `API_AUTH_TOKEN` | Yes | Admin fallback token (bootstrap, emergencies) |
+| `UPSTASH_REDIS_REST_URL` | Yes | Upstash Redis REST endpoint |
+| `UPSTASH_REDIS_REST_TOKEN` | Yes | Upstash Redis auth token |
+| `MAX_TRANSACTION_SATS` | No | Global per-tx limit (default: 1000) |
+| `DAILY_BUDGET_SATS` | No | Global daily limit (default: 10000) |
 
 ## Getting started
 
-See [`skills/deploy/SKILL.md`](skills/deploy/SKILL.md) for deployment instructions. This is a Claude Code skill you can give to an admin agent, or just follow the instructions yourself. You'll need a [Vercel](https://vercel.com) account (free) and an [Upstash Redis](https://console.upstash.com) instance (free).
-
-Once deployed, hit the API with any HTTP client:
+You'll need a [Vercel](https://vercel.com) account (free tier works) and an [Upstash Redis](https://console.upstash.com) database (free tier works).
 
 ```bash
-curl https://your-deployment.vercel.app/api/balance \
-  -H "Authorization: Bearer your-token"
+git clone https://github.com/echennells/sparkbtcbot-proxy.git
+cd sparkbtcbot-proxy
+npm install
+npx vercel --prod
 ```
+
+Set the environment variables in the Vercel dashboard, then redeploy.
+
+For detailed step-by-step instructions (including generating a mnemonic and creating the Redis database via API), see [`skills/deploy/SKILL.md`](skills/deploy/SKILL.md). That file is also a Claude skill you can give to an agent to handle deployment for you.
 
 ## See also
 
-[sparkbtcbot-skill](https://github.com/echennells/sparkbtcbot-skill) — a simpler option that gives the agent direct SDK access. No server, no deploy, but the agent holds the mnemonic and there are no spending limits.
+[sparkbtcbot-skill](https://github.com/echennells/sparkbtcbot-skill) — gives an agent direct Spark SDK access. Simpler (no server), but the agent holds the mnemonic and there are no spending limits.
