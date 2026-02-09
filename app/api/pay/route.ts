@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { decode } from "light-bolt11-decoder";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
@@ -19,6 +20,23 @@ export async function POST(request: NextRequest) {
       return errorResponse("maxFeeSats is required", "BAD_REQUEST");
     }
 
+    // Decode invoice to get the actual payment amount
+    let invoiceAmountSats: number;
+    try {
+      const decoded = decode(invoice);
+      const amountSection = decoded.sections.find((s) => s.name === "amount");
+      if (!amountSection || !("value" in amountSection) || !amountSection.value) {
+        return errorResponse(
+          "Invoice has no amount — amountless invoices are not supported",
+          "BAD_REQUEST"
+        );
+      }
+      // BOLT11 amount is in millisatoshis
+      invoiceAmountSats = Math.ceil(Number(amountSection.value) / 1000);
+    } catch {
+      return errorResponse("Failed to decode invoice", "BAD_REQUEST");
+    }
+
     let feeEstimate = maxFeeSats;
     try {
       feeEstimate = await wallet.getLightningSendFeeEstimate({
@@ -28,7 +46,8 @@ export async function POST(request: NextRequest) {
       // Fall back to maxFeeSats if estimate fails
     }
 
-    const estimatedTotal = maxFeeSats + feeEstimate;
+    // Budget includes invoice amount + fees
+    const estimatedTotal = invoiceAmountSats + feeEstimate;
 
     // Atomically check and reserve budget before payment
     const reserve = await reserveSpend(estimatedTotal, {
