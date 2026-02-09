@@ -144,6 +144,8 @@ The response includes the full token string — save it, it's only shown once. S
 | POST | `/api/invoice/spark` | Create Spark invoice (`{amount?, memo?}`) |
 | POST | `/api/pay` | Pay Lightning invoice — admin only (`{invoice, maxFeeSats}`) |
 | POST | `/api/transfer` | Spark transfer — admin only (`{receiverSparkAddress, amountSats}`) |
+| POST | `/api/l402` | Pay L402 paywall — admin only (`{url, method?, headers?, body?, maxFeeSats?}`) |
+| GET | `/api/l402/status` | Check/complete pending L402 (`?id=<pendingId>`) |
 | GET | `/api/tokens` | List API tokens — admin only |
 | POST | `/api/tokens` | Create a new token — admin only (`{role, label}`) |
 | DELETE | `/api/tokens` | Revoke a token — admin only (`{token}`) |
@@ -186,6 +188,67 @@ curl -X DELETE -H "Authorization: Bearer <admin-token>" \
 ```
 
 Tokens are stored in Redis (hash `spark:tokens`). They survive redeploys but not Redis flushes.
+
+## L402 Paywall Support
+
+The proxy can pay [L402](https://docs.lightning.engineering/the-lightning-network/l402) Lightning paywalls automatically. Send a URL, and the proxy will:
+
+1. Fetch the URL
+2. If 402 returned, parse the invoice and macaroon
+3. Pay the Lightning invoice
+4. Retry the request with the L402 Authorization header
+5. Return the protected content
+
+### Basic usage
+
+```bash
+curl -X POST -H "Authorization: Bearer <admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://lightningfaucet.com/api/l402/joke"}' \
+  https://<deployment>/api/l402
+```
+
+### Handling pending payments (important for agents)
+
+Lightning payments via Spark are asynchronous. The proxy polls for up to ~7.5 seconds, but if the preimage isn't available in time, it returns a **pending** status:
+
+```json
+{
+  "success": true,
+  "data": {
+    "status": "pending",
+    "pendingId": "a1b2c3d4e5f6...",
+    "message": "Payment sent but preimage not yet available. Poll GET /api/l402/status?id=<pendingId> to complete.",
+    "priceSats": 21
+  }
+}
+```
+
+**Your agent MUST handle this case.** The payment has already been sent — if you don't poll for completion, you lose the sats without getting the content.
+
+**Retry loop (pseudocode):**
+
+```
+response = POST /api/l402 { url: "..." }
+
+if response.data.status == "pending":
+    pendingId = response.data.pendingId
+    for attempt in 1..10:
+        sleep(3 seconds)
+        status = GET /api/l402/status?id={pendingId}
+        if status.data.status != "pending":
+            return status.data  # Success or failure
+    # Give up after ~30 seconds
+    raise "L402 payment timed out"
+else:
+    return response.data  # Immediate success
+```
+
+**Key points:**
+- Pending records expire after 1 hour
+- The `/api/l402/status` endpoint polls Spark for up to 5 seconds per call
+- If the payment failed on Spark's side, status will return an error
+- Once complete, the pending record is deleted from Redis
 
 ## Common Operations
 

@@ -3,11 +3,58 @@ import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
 import { SparkWallet } from "@buildonspark/spark-sdk";
+import { Redis } from "@upstash/redis";
+import { randomBytes } from "crypto";
 
 interface L402Challenge {
   invoice: string;
   macaroon: string;
   priceSats?: number;
+}
+
+export interface PendingL402 {
+  paymentId: string;
+  macaroon: string;
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: unknown;
+  priceSats?: number;
+  createdAt: number;
+}
+
+const PENDING_L402_KEY = "spark:pending_l402";
+const PENDING_L402_TTL = 60 * 60; // 1 hour
+
+let _redis: Redis | null = null;
+function getRedis(): Redis {
+  if (!_redis) {
+    _redis = new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL!,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+    });
+  }
+  return _redis;
+}
+
+export async function storePendingL402(pending: PendingL402): Promise<string> {
+  const pendingId = randomBytes(16).toString("hex");
+  await getRedis().hset(PENDING_L402_KEY, {
+    [pendingId]: JSON.stringify(pending),
+  });
+  // Set TTL on the hash (note: this resets TTL on every write, which is fine)
+  await getRedis().expire(PENDING_L402_KEY, PENDING_L402_TTL);
+  return pendingId;
+}
+
+export async function getPendingL402(pendingId: string): Promise<PendingL402 | null> {
+  const raw = await getRedis().hget(PENDING_L402_KEY, pendingId);
+  if (!raw) return null;
+  return typeof raw === "string" ? JSON.parse(raw) : (raw as PendingL402);
+}
+
+export async function deletePendingL402(pendingId: string): Promise<void> {
+  await getRedis().hdel(PENDING_L402_KEY, pendingId);
 }
 
 const MAX_POLL_ATTEMPTS = 15;
@@ -175,6 +222,29 @@ export async function POST(request: NextRequest) {
     if (!preimage && status === "LIGHTNING_PAYMENT_INITIATED" && requestId) {
       const pollResult = await waitForPreimage(wallet, requestId);
       if ("error" in pollResult) {
+        // Timeout or error - but payment may still complete
+        // Store as pending so caller can retry via /api/l402/status
+        if (pollResult.error.includes("Timeout")) {
+          const pendingId = await storePendingL402({
+            paymentId: requestId,
+            macaroon: challenge.macaroon,
+            url,
+            method,
+            headers,
+            body: requestBody,
+            priceSats: challenge.priceSats,
+            createdAt: Date.now(),
+          });
+
+          return successResponse({
+            status: "pending",
+            pendingId,
+            message: "Payment sent but preimage not yet available. Poll GET /api/l402/status?id=<pendingId> to complete.",
+            priceSats: challenge.priceSats,
+          });
+        }
+
+        // Actual failure (not timeout)
         await releaseSpend(estimatedTotal, auth.tokenId);
         await logEvent({
           action: "error",
@@ -188,6 +258,27 @@ export async function POST(request: NextRequest) {
     }
 
     if (!preimage) {
+      // No preimage and no requestId to poll - store as pending if we have requestId
+      if (requestId) {
+        const pendingId = await storePendingL402({
+          paymentId: requestId,
+          macaroon: challenge.macaroon,
+          url,
+          method,
+          headers,
+          body: requestBody,
+          priceSats: challenge.priceSats,
+          createdAt: Date.now(),
+        });
+
+        return successResponse({
+          status: "pending",
+          pendingId,
+          message: "Payment sent but preimage not yet available. Poll GET /api/l402/status?id=<pendingId> to complete.",
+          priceSats: challenge.priceSats,
+        });
+      }
+
       await releaseSpend(estimatedTotal, auth.tokenId);
       return errorResponse(
         `Payment completed but no preimage available. Status: ${status || "unknown"}`,

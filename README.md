@@ -42,6 +42,7 @@ All routes require `Authorization: Bearer <token>`.
 | POST | `/api/pay` | Pay Lightning invoice | `{invoice, maxFeeSats}` |
 | POST | `/api/transfer` | Send to Spark address | `{receiverSparkAddress, amountSats}` |
 | POST | `/api/l402` | Pay L402 paywall and fetch content | `{url, method?, headers?, body?, maxFeeSats?}` |
+| GET | `/api/l402/status` | Check/complete pending L402 | `?id=<pendingId>` |
 | GET | `/api/tokens` | List tokens | — |
 | POST | `/api/tokens` | Create token | `{role, label, maxTxSats?, dailyBudgetSats?}` |
 | DELETE | `/api/tokens` | Revoke token | `{token}` |
@@ -89,6 +90,39 @@ Returns:
   }
 }
 ```
+
+#### Handling pending L402 payments
+
+Lightning payments via Spark are asynchronous. If the payment succeeds but the preimage isn't available within the timeout window (~7.5 seconds), the proxy returns a `pending` status instead of failing:
+
+```json
+{
+  "success": true,
+  "data": {
+    "status": "pending",
+    "pendingId": "a1b2c3d4...",
+    "message": "Payment sent but preimage not yet available. Poll GET /api/l402/status?id=<pendingId> to complete.",
+    "priceSats": 21
+  }
+}
+```
+
+**Agents must handle this case.** When you receive `status: "pending"`:
+
+1. Wait 2-5 seconds
+2. Call `GET /api/l402/status?id=<pendingId>`
+3. If still pending, repeat steps 1-2 (up to ~30 seconds total)
+4. Once complete, you'll get the full response with the protected content
+
+```bash
+# Poll for completion
+curl "https://your-deployment.vercel.app/api/l402/status?id=a1b2c3d4..." \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The pending state is stored in Redis with a 1-hour TTL. If you don't poll within that window, the pending record expires and you'll need to make a new L402 request (which will pay again).
+
+**Important for agent developers:** Your agent logic should include a retry loop for L402 requests. The payment has already been sent — failing to poll means you paid but didn't get the content.
 
 ## Environment variables
 
