@@ -1,4 +1,5 @@
 import { SparkWallet } from "@buildonspark/spark-sdk";
+import { logEvent } from "@/lib/log";
 
 const STALE_LEAF_ERROR_PATTERNS = [
   "refund transaction sequence must be less than or equal to",
@@ -39,6 +40,12 @@ export async function consolidateLeaves(wallet: SparkWallet): Promise<boolean> {
     amountSats: balanceSats,
   });
 
+  await logEvent({
+    action: "leaf_consolidation",
+    success: true,
+    amountSats: balanceSats,
+  });
+
   return true;
 }
 
@@ -54,6 +61,13 @@ export async function withStaleLeafRecovery<T>(
     return await operation();
   } catch (err) {
     if (isStaleLeafError(err)) {
+      // Log the stale leaf error before attempting recovery
+      await logEvent({
+        action: "error",
+        success: false,
+        error: `Stale leaf detected, attempting consolidation: ${err instanceof Error ? err.message : String(err)}`,
+      });
+
       // Try to consolidate leaves
       const consolidated = await consolidateLeaves(wallet);
       if (consolidated) {
