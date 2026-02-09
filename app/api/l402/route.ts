@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { decode } from "light-bolt11-decoder";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
@@ -169,7 +170,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Step 3: Estimate cost and check budget
+    // Step 3: Decode invoice to get the actual payment amount
+    let invoiceAmountSats: number;
+    try {
+      const decoded = decode(challenge.invoice);
+      const amountSection = decoded.sections.find((s) => s.name === "amount");
+      if (!amountSection || !("value" in amountSection) || !amountSection.value) {
+        return errorResponse(
+          "L402 invoice has no amount — amountless invoices are not supported",
+          "L402_INVALID_CHALLENGE"
+        );
+      }
+      // BOLT11 amount is in millisatoshis
+      invoiceAmountSats = Math.ceil(Number(amountSection.value) / 1000);
+    } catch {
+      return errorResponse("Failed to decode L402 invoice", "L402_INVALID_CHALLENGE");
+    }
+
+    // Step 4: Estimate fees and check budget
     let feeEstimate = maxFeeSats;
     try {
       feeEstimate = await wallet.getLightningSendFeeEstimate({
@@ -179,7 +197,8 @@ export async function POST(request: NextRequest) {
       // Fall back to maxFeeSats
     }
 
-    const estimatedTotal = maxFeeSats + feeEstimate;
+    // Budget includes invoice amount + fees
+    const estimatedTotal = invoiceAmountSats + feeEstimate;
 
     const reserve = await reserveSpend(estimatedTotal, {
       tokenId: auth.tokenId,
@@ -190,7 +209,7 @@ export async function POST(request: NextRequest) {
       return errorResponse(reserve.reason!, reserve.code!, 403);
     }
 
-    // Step 4: Pay the invoice
+    // Step 5: Pay the invoice
     let paymentResult;
     try {
       paymentResult = await wallet.payLightningInvoice({
@@ -293,7 +312,7 @@ export async function POST(request: NextRequest) {
       priceSats: challenge.priceSats,
     });
 
-    // Step 5: Retry with L402 authorization
+    // Step 6: Retry with L402 authorization
     let finalResponse: Response;
     try {
       finalResponse = await fetch(url, {
