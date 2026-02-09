@@ -14,6 +14,7 @@ This proxy solves that:
 - **Spending limits** — cap per-transaction and daily spend (global or per-token)
 - **Revocable access** — cut off a compromised agent without moving funds
 - **Role-based auth** — give agents invoice-only access if they don't need to spend
+- **L402 support** — pay Lightning paywalls automatically and fetch protected content
 
 ## Token roles
 
@@ -40,12 +41,13 @@ All routes require `Authorization: Bearer <token>`.
 | POST | `/api/invoice/spark` | Create Spark invoice | `{amount?, memo?}` |
 | POST | `/api/pay` | Pay Lightning invoice | `{invoice, maxFeeSats}` |
 | POST | `/api/transfer` | Send to Spark address | `{receiverSparkAddress, amountSats}` |
+| POST | `/api/l402` | Pay L402 paywall and fetch content | `{url, method?, headers?, body?, maxFeeSats?}` |
 | GET | `/api/tokens` | List tokens | — |
 | POST | `/api/tokens` | Create token | `{role, label, maxTxSats?, dailyBudgetSats?}` |
 | DELETE | `/api/tokens` | Revoke token | `{token}` |
 
 **Notes:**
-- `POST /api/pay` and `POST /api/transfer` require an `admin` token
+- `POST /api/pay`, `POST /api/transfer`, and `POST /api/l402` require an `admin` token
 - Token management routes (`/api/tokens`) require an `admin` token
 - All other routes work with either role
 
@@ -61,6 +63,31 @@ curl -X POST https://your-deployment.vercel.app/api/invoice/create \
 Returns:
 ```json
 {"success": true, "data": {"encodedInvoice": "lnbc10u1p..."}}
+```
+
+### Example: L402 paywall
+
+[L402](https://docs.lightning.engineering/the-lightning-network/l402) lets agents pay for API access with Lightning. The proxy handles the full flow: detect 402, pay invoice, get preimage, retry with auth.
+
+```bash
+curl -X POST https://your-deployment.vercel.app/api/l402 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://lightningfaucet.com/api/l402/joke"}'
+```
+
+Returns:
+```json
+{
+  "success": true,
+  "data": {
+    "status": 200,
+    "paid": true,
+    "priceSats": 21,
+    "preimage": "be2ebe7c...",
+    "data": {"setup": "What's a programmer's favorite hangout?", "punchline": "Foo Bar!"}
+  }
+}
 ```
 
 ## Environment variables

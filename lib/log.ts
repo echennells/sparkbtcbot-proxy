@@ -26,6 +26,7 @@ export type LogAction =
   | "transfer_sent"
   | "invoice_paid"
   | "invoice_expired"
+  | "l402_payment"
   | "error";
 
 export interface LogEntry {
@@ -36,6 +37,8 @@ export interface LogEntry {
   memo?: string;
   invoice?: string;
   error?: string;
+  url?: string;
+  priceSats?: number;
 }
 
 interface PendingInvoice {
