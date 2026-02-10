@@ -3,6 +3,7 @@ import { decode } from "light-bolt11-decoder";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
+import { withStaleLeafRecovery } from "@/lib/leaves";
 
 export async function POST(request: NextRequest) {
   return withWallet(request, async (wallet, auth) => {
@@ -61,10 +62,12 @@ export async function POST(request: NextRequest) {
 
     let result;
     try {
-      result = await wallet.payLightningInvoice({
-        invoice,
-        maxFeeSats,
-      });
+      result = await withStaleLeafRecovery(wallet, () =>
+        wallet.payLightningInvoice({
+          invoice,
+          maxFeeSats,
+        })
+      );
     } catch (err) {
       // Payment failed — release the reserved budget
       await releaseSpend(estimatedTotal, auth.tokenId);
