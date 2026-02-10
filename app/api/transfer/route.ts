@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
-import { withStaleLeafRecovery } from "@/lib/leaves";
 
 export async function POST(request: NextRequest) {
   return withWallet(request, async (wallet, auth) => {
@@ -32,12 +31,10 @@ export async function POST(request: NextRequest) {
 
     let transfer;
     try {
-      transfer = await withStaleLeafRecovery(wallet, () =>
-        wallet.transfer({
-          receiverSparkAddress,
-          amountSats,
-        })
-      );
+      transfer = await wallet.transfer({
+        receiverSparkAddress,
+        amountSats,
+      });
     } catch (err) {
       // Transfer failed — release the reserved budget
       await releaseSpend(amountSats, auth.tokenId);

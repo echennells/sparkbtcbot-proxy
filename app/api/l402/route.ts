@@ -3,7 +3,6 @@ import { decode } from "light-bolt11-decoder";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
-import { withStaleLeafRecovery } from "@/lib/leaves";
 import { SparkWallet } from "@buildonspark/spark-sdk";
 import { Redis } from "@upstash/redis";
 import { randomBytes } from "crypto";
@@ -210,15 +209,13 @@ export async function POST(request: NextRequest) {
       return errorResponse(reserve.reason!, reserve.code!, 403);
     }
 
-    // Step 5: Pay the invoice (with stale leaf recovery)
+    // Step 5: Pay the invoice
     let paymentResult;
     try {
-      paymentResult = await withStaleLeafRecovery(wallet, () =>
-        wallet.payLightningInvoice({
-          invoice: challenge.invoice,
-          maxFeeSats,
-        })
-      );
+      paymentResult = await wallet.payLightningInvoice({
+        invoice: challenge.invoice,
+        maxFeeSats,
+      });
     } catch (err) {
       await releaseSpend(estimatedTotal, auth.tokenId);
       await logEvent({
