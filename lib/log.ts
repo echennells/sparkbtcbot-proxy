@@ -27,7 +27,6 @@ export type LogAction =
   | "invoice_paid"
   | "invoice_expired"
   | "l402_payment"
-  | "leaf_consolidation"
   | "error";
 
 export interface LogEntry {
