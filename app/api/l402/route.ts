@@ -312,10 +312,12 @@ export async function POST(request: NextRequest) {
       priceSats: challenge.priceSats,
     });
 
-    // Step 6: Retry with L402 authorization
-    let finalResponse: Response;
-    try {
-      finalResponse = await fetch(url, {
+    // Step 6: Fetch with L402 authorization (retry if response looks empty)
+    const MAX_FINAL_RETRIES = 3;
+    const FINAL_RETRY_DELAY_MS = 200;
+
+    const fetchWithAuth = async () => {
+      const response = await fetch(url, {
         method,
         headers: {
           "Content-Type": "application/json",
@@ -324,6 +326,40 @@ export async function POST(request: NextRequest) {
         },
         body: requestBody ? JSON.stringify(requestBody) : undefined,
       });
+
+      const contentType = response.headers.get("content-type") || "";
+      let data: unknown;
+
+      if (contentType.includes("application/json")) {
+        data = await response.json();
+      } else {
+        data = await response.text();
+      }
+
+      return { status: response.status, data };
+    };
+
+    const isEmptyData = (data: unknown): boolean => {
+      if (data === null || data === undefined) return true;
+      if (typeof data === "string" && data.trim() === "") return true;
+      if (typeof data === "object") {
+        const obj = data as Record<string, unknown>;
+        // Check for null fields that should have content (like joke setup/punchline)
+        if ("setup" in obj && obj.setup === null) return true;
+        if ("punchline" in obj && obj.punchline === null) return true;
+      }
+      return false;
+    };
+
+    let finalResult: { status: number; data: unknown };
+    try {
+      finalResult = await fetchWithAuth();
+
+      // Retry if data looks empty - server might not have processed payment yet
+      for (let i = 0; i < MAX_FINAL_RETRIES && isEmptyData(finalResult.data); i++) {
+        await new Promise((resolve) => setTimeout(resolve, FINAL_RETRY_DELAY_MS));
+        finalResult = await fetchWithAuth();
+      }
     } catch (err) {
       return errorResponse(
         `L402 retry failed: ${err instanceof Error ? err.message : "Unknown error"}`,
@@ -331,21 +367,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const contentType = finalResponse.headers.get("content-type") || "";
-    let finalData: unknown;
-
-    if (contentType.includes("application/json")) {
-      finalData = await finalResponse.json();
-    } else {
-      finalData = await finalResponse.text();
-    }
-
     return successResponse({
-      status: finalResponse.status,
+      status: finalResult.status,
       paid: true,
       priceSats: challenge.priceSats,
       preimage,
-      data: finalData,
+      data: finalResult.data,
     });
   });
 }
