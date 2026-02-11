@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { logEvent } from "@/lib/log";
+import { canPay } from "@/lib/auth";
 import { getPendingL402, deletePendingL402 } from "../route";
 
 const MAX_POLL_ATTEMPTS = 10;
@@ -14,7 +15,7 @@ export async function GET(request: NextRequest) {
   }
 
   return withWallet(request, async (wallet, auth) => {
-    if (auth.role !== "admin") {
+    if (!canPay(auth.role)) {
       return errorResponse(
         "This token does not have permission to check L402 status",
         "UNAUTHORIZED",

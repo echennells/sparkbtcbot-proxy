@@ -19,12 +19,18 @@ function getTodayKey(tokenId: string): string {
 
 // Lua script: atomically check budget and increment if allowed.
 // Returns [1, newTotal, 0] on success, [0, currentSpend, reason] if rejected.
+// Reason codes: 1 = tx too large, 2 = budget exceeded, 3 = invalid params
 const RESERVE_SCRIPT = `
 local key = KEYS[1]
 local amount = tonumber(ARGV[1])
 local maxTx = tonumber(ARGV[2])
 local dailyLimit = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
+
+-- Fail-safe: reject if any parameter is invalid
+if not amount or not maxTx or not dailyLimit or amount <= 0 or maxTx <= 0 or dailyLimit <= 0 then
+  return {0, 0, 3}
+end
 
 if amount > maxTx then
   return {0, tonumber(redis.call("GET", key) or "0"), 1}
@@ -45,7 +51,7 @@ export type ReserveResult = {
   reason?: string;
   dailySpent: number;
   dailyLimit: number;
-  code?: "TRANSACTION_TOO_LARGE" | "BUDGET_EXCEEDED";
+  code?: "TRANSACTION_TOO_LARGE" | "BUDGET_EXCEEDED" | "INVALID_AMOUNT";
 };
 
 export interface BudgetParams {
@@ -59,6 +65,36 @@ export async function reserveSpend(
   params: BudgetParams
 ): Promise<ReserveResult> {
   const { tokenId, maxTxSats, dailyBudgetSats } = params;
+
+  // Validate inputs are positive integers before hitting Redis
+  if (!Number.isInteger(amountSats) || amountSats <= 0) {
+    return {
+      allowed: false,
+      reason: `amountSats must be a positive integer, got: ${amountSats}`,
+      dailySpent: 0,
+      dailyLimit: dailyBudgetSats,
+      code: "INVALID_AMOUNT",
+    };
+  }
+  if (!Number.isInteger(maxTxSats) || maxTxSats <= 0) {
+    return {
+      allowed: false,
+      reason: `Invalid maxTxSats configuration: ${maxTxSats}`,
+      dailySpent: 0,
+      dailyLimit: dailyBudgetSats,
+      code: "INVALID_AMOUNT",
+    };
+  }
+  if (!Number.isInteger(dailyBudgetSats) || dailyBudgetSats <= 0) {
+    return {
+      allowed: false,
+      reason: `Invalid dailyBudgetSats configuration: ${dailyBudgetSats}`,
+      dailySpent: 0,
+      dailyLimit: dailyBudgetSats,
+      code: "INVALID_AMOUNT",
+    };
+  }
+
   const key = getTodayKey(tokenId);
 
   const result = (await getRedis().eval(RESERVE_SCRIPT, [key], [
@@ -84,6 +120,16 @@ export async function reserveSpend(
     };
   }
 
+  if (reason === 3) {
+    return {
+      allowed: false,
+      reason: "Invalid budget parameters",
+      dailySpent: 0,
+      dailyLimit: dailyBudgetSats,
+      code: "INVALID_AMOUNT",
+    };
+  }
+
   return {
     allowed: false,
     reason: `Would exceed daily budget. Spent: ${spent}, Requested: ${amountSats}, Limit: ${dailyBudgetSats}`,
@@ -105,4 +151,18 @@ export async function releaseSpend(
 export async function getDailySpend(tokenId: string): Promise<number> {
   const key = getTodayKey(tokenId);
   return (await getRedis().get<number>(key)) || 0;
+}
+
+export async function resetDailySpend(tokenId: string): Promise<void> {
+  const key = getTodayKey(tokenId);
+  await getRedis().del(key);
+}
+
+export async function resetAllDailySpends(): Promise<number> {
+  const today = new Date().toISOString().split("T")[0];
+  const pattern = `spark:daily_spend:*:${today}`;
+  const keys = await getRedis().keys(pattern);
+  if (keys.length === 0) return 0;
+  await Promise.all(keys.map((key) => getRedis().del(key)));
+  return keys.length;
 }

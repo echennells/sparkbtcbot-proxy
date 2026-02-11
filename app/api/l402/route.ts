@@ -3,6 +3,7 @@ import { decode } from "light-bolt11-decoder";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
+import { canPay } from "@/lib/auth";
 import { SparkWallet } from "@buildonspark/spark-sdk";
 import { Redis } from "@upstash/redis";
 import { randomBytes } from "crypto";
@@ -26,6 +27,44 @@ export interface PendingL402 {
 
 const PENDING_L402_KEY = "spark:pending_l402";
 const PENDING_L402_TTL = 60 * 60; // 1 hour
+
+const L402_TOKEN_KEY = "spark:l402_tokens";
+const L402_TOKEN_TTL = 24 * 60 * 60; // 24 hours max cache
+
+interface CachedL402Token {
+  macaroon: string;
+  preimage: string;
+  cachedAt: number;
+}
+
+function extractDomain(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.host;
+  } catch {
+    return url;
+  }
+}
+
+async function getCachedToken(domain: string): Promise<CachedL402Token | null> {
+  const raw = await getRedis().hget(L402_TOKEN_KEY, domain);
+  if (!raw) return null;
+  return typeof raw === "string" ? JSON.parse(raw) : (raw as CachedL402Token);
+}
+
+async function cacheToken(domain: string, macaroon: string, preimage: string): Promise<void> {
+  const token: CachedL402Token = {
+    macaroon,
+    preimage,
+    cachedAt: Date.now(),
+  };
+  await getRedis().hset(L402_TOKEN_KEY, { [domain]: JSON.stringify(token) });
+  await getRedis().expire(L402_TOKEN_KEY, L402_TOKEN_TTL);
+}
+
+async function deleteCachedToken(domain: string): Promise<void> {
+  await getRedis().hdel(L402_TOKEN_KEY, domain);
+}
 
 let _redis: Redis | null = null;
 function getRedis(): Redis {
@@ -107,7 +146,7 @@ function parseL402Response(body: unknown): L402Challenge | null {
 
 export async function POST(request: NextRequest) {
   return withWallet(request, async (wallet, auth) => {
-    if (auth.role !== "admin") {
+    if (!canPay(auth.role)) {
       return errorResponse("This token does not have permission to make L402 requests", "UNAUTHORIZED", 403);
     }
 
@@ -116,6 +155,102 @@ export async function POST(request: NextRequest) {
 
     if (!url || typeof url !== "string") {
       return errorResponse("url is required", "BAD_REQUEST");
+    }
+    if (typeof maxFeeSats !== "number" || maxFeeSats <= 0) {
+      return errorResponse("maxFeeSats must be a positive number", "BAD_REQUEST");
+    }
+
+    const domain = extractDomain(url);
+
+    // Helper to check for empty/null content
+    const isEmptyData = (data: unknown): boolean => {
+      if (data === null || data === undefined) return true;
+      if (typeof data === "string" && data.trim() === "") return true;
+      if (typeof data === "object") {
+        const obj = data as Record<string, unknown>;
+        // Check for null fields that should have content (like joke setup/punchline)
+        if ("setup" in obj && obj.setup === null) return true;
+        if ("punchline" in obj && obj.punchline === null) return true;
+      }
+      return false;
+    };
+
+    // Step 0: Check for cached L402 token for this domain
+    const cachedToken = await getCachedToken(domain);
+    if (cachedToken) {
+      const fetchWithCachedToken = async () => {
+        const response = await fetch(url, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `L402 ${cachedToken.macaroon}:${cachedToken.preimage}`,
+            ...headers,
+          },
+          body: requestBody ? JSON.stringify(requestBody) : undefined,
+        });
+
+        const contentType = response.headers.get("content-type") || "";
+        let data: unknown;
+        if (contentType.includes("application/json")) {
+          data = await response.json();
+        } else {
+          data = await response.text();
+        }
+        return { status: response.status, data };
+      };
+
+      // Helper to check if response indicates token is invalid/expired
+      const isTokenInvalid = (status: number, data: unknown): boolean => {
+        // 401 = unauthorized, 402 = payment required, 403 = forbidden
+        if (status === 401 || status === 402 || status === 403) return true;
+        // Check for error responses that indicate token issues
+        if (data && typeof data === "object") {
+          const obj = data as Record<string, unknown>;
+          if (obj.error === "invalid_token" || obj.error === "expired_token") return true;
+          if (typeof obj.message === "string" && obj.message.toLowerCase().includes("expired")) return true;
+        }
+        return false;
+      };
+
+      try {
+        let cachedResult = await fetchWithCachedToken();
+
+        // If token is invalid/expired, delete cache and continue to pay
+        if (isTokenInvalid(cachedResult.status, cachedResult.data)) {
+          await deleteCachedToken(domain);
+        } else {
+          // Non-error response - check if content is empty (might be single-use token)
+          // Retry a few times in case server is slow
+          const MAX_CACHE_RETRIES = 2;
+          const CACHE_RETRY_DELAY_MS = 200;
+
+          for (let i = 0; i < MAX_CACHE_RETRIES && isEmptyData(cachedResult.data); i++) {
+            await new Promise((resolve) => setTimeout(resolve, CACHE_RETRY_DELAY_MS));
+            cachedResult = await fetchWithCachedToken();
+            if (isTokenInvalid(cachedResult.status, cachedResult.data)) break;
+          }
+
+          // If token became invalid after retries, delete cache and continue to pay
+          if (isTokenInvalid(cachedResult.status, cachedResult.data)) {
+            await deleteCachedToken(domain);
+          } else if (isEmptyData(cachedResult.data)) {
+            // Still empty after retries - token might be single-use and exhausted
+            // Delete cache and continue to pay for fresh token
+            await deleteCachedToken(domain);
+          } else {
+            // Got valid data with cached token
+            return successResponse({
+              status: cachedResult.status,
+              paid: false,
+              cached: true,
+              data: cachedResult.data,
+            });
+          }
+        }
+      } catch {
+        // Network error with cached token - delete and try fresh
+        await deleteCachedToken(domain);
+      }
     }
 
     // Step 1: Make initial request
@@ -312,6 +447,9 @@ export async function POST(request: NextRequest) {
       priceSats: challenge.priceSats,
     });
 
+    // Cache the token for future requests to this domain
+    await cacheToken(domain, challenge.macaroon, preimage);
+
     // Step 6: Fetch with L402 authorization (retry if response looks empty)
     const MAX_FINAL_RETRIES = 3;
     const FINAL_RETRY_DELAY_MS = 200;
@@ -337,18 +475,6 @@ export async function POST(request: NextRequest) {
       }
 
       return { status: response.status, data };
-    };
-
-    const isEmptyData = (data: unknown): boolean => {
-      if (data === null || data === undefined) return true;
-      if (typeof data === "string" && data.trim() === "") return true;
-      if (typeof data === "object") {
-        const obj = data as Record<string, unknown>;
-        // Check for null fields that should have content (like joke setup/punchline)
-        if ("setup" in obj && obj.setup === null) return true;
-        if ("punchline" in obj && obj.punchline === null) return true;
-      }
-      return false;
     };
 
     let finalResult: { status: number; data: unknown };

@@ -1,17 +1,24 @@
 import { NextRequest } from "next/server";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { logEvent, trackPendingInvoice } from "@/lib/log";
+import { canCreateInvoice } from "@/lib/auth";
 
 const DEFAULT_EXPIRY_SECONDS = 3600; // 1 hour
 
 export async function POST(request: NextRequest) {
-  return withWallet(request, async (wallet, _auth) => {
+  return withWallet(request, async (wallet, auth) => {
+    if (!canCreateInvoice(auth.role)) {
+      return errorResponse("This token does not have permission to create invoices", "UNAUTHORIZED", 403);
+    }
     const body = await request.json();
     const { amountSats, memo } = body;
-    const expirySeconds = body.expirySeconds || DEFAULT_EXPIRY_SECONDS;
+    const expirySeconds = body.expirySeconds ?? DEFAULT_EXPIRY_SECONDS;
 
-    if (!amountSats || typeof amountSats !== "number" || amountSats <= 0) {
-      return errorResponse("amountSats is required and must be a positive number", "BAD_REQUEST");
+    if (!amountSats || typeof amountSats !== "number" || !Number.isInteger(amountSats) || amountSats <= 0) {
+      return errorResponse("amountSats is required and must be a positive integer", "BAD_REQUEST");
+    }
+    if (typeof expirySeconds !== "number" || !Number.isInteger(expirySeconds) || expirySeconds <= 0) {
+      return errorResponse("expirySeconds must be a positive integer", "BAD_REQUEST");
     }
 
     const result = await wallet.createLightningInvoice({

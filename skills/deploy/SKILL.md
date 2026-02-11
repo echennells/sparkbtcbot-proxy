@@ -134,6 +134,7 @@ The response includes the full token string — save it, it's only shown once. S
 
 | Method | Route | Description |
 |--------|-------|-------------|
+| GET | `/llms.txt` | API documentation for bots (no auth required) |
 | GET | `/api/balance` | Wallet balance (sats + tokens) |
 | GET | `/api/info` | Spark address and identity pubkey |
 | GET | `/api/transactions` | Transfer history (`?limit=&offset=`) |
@@ -245,10 +246,12 @@ else:
 ```
 
 **Key points:**
+- **Token caching**: Paid L402 tokens are cached per-domain (up to 24 hours). Subsequent requests to the same domain reuse the cached token without paying again. If the token expires, the proxy pays for a new one automatically.
 - Pending records expire after 1 hour
 - The `/api/l402/status` endpoint polls Spark for up to 5 seconds per call
 - If the payment failed on Spark's side, status will return an error
 - Once complete, the pending record is deleted from Redis
+- The proxy automatically retries the final fetch up to 3 times (200ms delay) if the response is empty — some servers don't return content immediately after payment
 
 ## Common Operations
 

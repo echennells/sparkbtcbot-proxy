@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { timingSafeEqual, randomBytes } from "crypto";
 import { Redis } from "@upstash/redis";
 
-export type TokenRole = "admin" | "invoice";
+export type TokenRole = "admin" | "invoice" | "pay-only" | "read-only";
 
 export interface TokenData {
   role: TokenRole;
@@ -72,7 +72,8 @@ export async function verifyAuth(
     if (raw) {
       const data: TokenData =
         typeof raw === "string" ? JSON.parse(raw) : (raw as TokenData);
-      if (data.role === "admin" || data.role === "invoice") {
+      const validRoles: TokenRole[] = ["admin", "invoice", "pay-only", "read-only"];
+      if (validRoles.includes(data.role)) {
         return {
           role: data.role,
           tokenId: token.slice(0, 16), // Use prefix for budget key (shorter, safer)
@@ -144,3 +145,21 @@ export async function revokeToken(token: string): Promise<boolean> {
   const removed = await getRedis().hdel(TOKENS_KEY, token);
   return removed > 0;
 }
+
+// Permission helpers
+// Roles that can send payments (pay invoices, transfer, L402)
+export function canPay(role: TokenRole): boolean {
+  return role === "admin" || role === "pay-only";
+}
+
+// Roles that can create invoices
+export function canCreateInvoice(role: TokenRole): boolean {
+  return role === "admin" || role === "invoice";
+}
+
+// Roles that can manage tokens
+export function canManageTokens(role: TokenRole): boolean {
+  return role === "admin";
+}
+
+// All roles can read (balance, info, transactions, logs, etc.)

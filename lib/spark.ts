@@ -54,7 +54,7 @@ export async function withWallet(
 
     return response;
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    const message = err instanceof Error ? (err.message || "Unknown wallet error") : "Unknown error";
     console.error("[spark-middleware]", message);
     return errorResponse(message, "WALLET_ERROR", 500);
   } finally {

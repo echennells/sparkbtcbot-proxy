@@ -2,10 +2,11 @@ import { NextRequest } from "next/server";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
+import { canPay } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   return withWallet(request, async (wallet, auth) => {
-    if (auth.role !== "admin") {
+    if (!canPay(auth.role)) {
       return errorResponse("This token does not have permission to send transfers", "UNAUTHORIZED", 403);
     }
 
@@ -15,8 +16,8 @@ export async function POST(request: NextRequest) {
     if (!receiverSparkAddress || typeof receiverSparkAddress !== "string") {
       return errorResponse("receiverSparkAddress is required", "BAD_REQUEST");
     }
-    if (!amountSats || typeof amountSats !== "number" || amountSats <= 0) {
-      return errorResponse("amountSats must be a positive number", "BAD_REQUEST");
+    if (!amountSats || typeof amountSats !== "number" || !Number.isInteger(amountSats) || amountSats <= 0) {
+      return errorResponse("amountSats must be a positive integer", "BAD_REQUEST");
     }
 
     // Atomically check and reserve budget before transfer

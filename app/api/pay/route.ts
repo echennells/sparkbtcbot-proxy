@@ -3,10 +3,11 @@ import { decode } from "light-bolt11-decoder";
 import { withWallet, successResponse, errorResponse } from "@/lib/spark";
 import { reserveSpend, releaseSpend } from "@/lib/budget";
 import { logEvent } from "@/lib/log";
+import { canPay } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   return withWallet(request, async (wallet, auth) => {
-    if (auth.role !== "admin") {
+    if (!canPay(auth.role)) {
       return errorResponse("This token does not have permission to send payments", "UNAUTHORIZED", 403);
     }
 
@@ -16,8 +17,8 @@ export async function POST(request: NextRequest) {
     if (!invoice || typeof invoice !== "string") {
       return errorResponse("invoice is required", "BAD_REQUEST");
     }
-    if (maxFeeSats === undefined || typeof maxFeeSats !== "number") {
-      return errorResponse("maxFeeSats is required", "BAD_REQUEST");
+    if (maxFeeSats === undefined || typeof maxFeeSats !== "number" || maxFeeSats <= 0) {
+      return errorResponse("maxFeeSats must be a positive number", "BAD_REQUEST");
     }
 
     // Decode invoice to get the actual payment amount

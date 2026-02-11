@@ -33,8 +33,9 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const { role, label, maxTxSats, dailyBudgetSats } = body;
 
-  if (!role || !["admin", "invoice"].includes(role)) {
-    return jsonError('role is required and must be "admin" or "invoice"', "BAD_REQUEST", 400);
+  const validRoles: TokenRole[] = ["admin", "invoice", "pay-only", "read-only"];
+  if (!role || !validRoles.includes(role)) {
+    return jsonError('role is required and must be "admin", "invoice", "pay-only", or "read-only"', "BAD_REQUEST", 400);
   }
   if (!label || typeof label !== "string") {
     return jsonError("label is required", "BAD_REQUEST", 400);

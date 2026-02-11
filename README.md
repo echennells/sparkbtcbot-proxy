@@ -21,7 +21,9 @@ This proxy solves that:
 | Role | Permissions |
 |------|-------------|
 | `admin` | Full access: read, create invoices, pay, transfer, manage tokens |
-| `invoice` | Read-only + create invoices. Cannot pay or transfer. |
+| `invoice` | Read + create invoices. Cannot pay or transfer. |
+| `pay-only` | Read + pay invoices and L402. Cannot create invoices or transfer. |
+| `read-only` | Read only (balance, info, transactions, logs). Cannot pay or create invoices. |
 
 The `API_AUTH_TOKEN` env var is a hardcoded admin fallback — it always works even if Redis is down. Use it to bootstrap: create scoped tokens via the API, then hand those to agents.
 
@@ -31,6 +33,7 @@ All routes require `Authorization: Bearer <token>`.
 
 | Method | Route | Description | Body |
 |--------|-------|-------------|------|
+| GET | `/llms.txt` | API documentation for bots | — |
 | GET | `/api/balance` | Wallet balance (sats + tokens) | — |
 | GET | `/api/info` | Spark address and pubkey | — |
 | GET | `/api/transactions` | Transfer history | `?limit=&offset=` |
@@ -42,15 +45,18 @@ All routes require `Authorization: Bearer <token>`.
 | POST | `/api/pay` | Pay Lightning invoice | `{invoice, maxFeeSats}` |
 | POST | `/api/transfer` | Send to Spark address | `{receiverSparkAddress, amountSats}` |
 | POST | `/api/l402` | Pay L402 paywall and fetch content | `{url, method?, headers?, body?, maxFeeSats?}` |
+| POST | `/api/l402/preview` | Check L402 cost without paying | `{url, method?, headers?, body?}` |
 | GET | `/api/l402/status` | Check/complete pending L402 | `?id=<pendingId>` |
 | GET | `/api/tokens` | List tokens | — |
 | POST | `/api/tokens` | Create token | `{role, label, maxTxSats?, dailyBudgetSats?}` |
 | DELETE | `/api/tokens` | Revoke token | `{token}` |
 
 **Notes:**
-- `POST /api/pay`, `POST /api/transfer`, and `POST /api/l402` require an `admin` token
+- `POST /api/pay`, `POST /api/transfer`, `POST /api/l402`, and `GET /api/l402/status` require `admin` or `pay-only` token
+- `POST /api/invoice/create` and `POST /api/invoice/spark` require `admin` or `invoice` token
 - Token management routes (`/api/tokens`) require an `admin` token
-- All other routes work with either role
+- Read-only routes (`/api/balance`, `/api/info`, etc.) work with any role
+- `POST /api/l402/preview` works with any role (doesn't spend)
 
 ### Example: create an invoice
 
@@ -91,6 +97,32 @@ Returns:
 }
 ```
 
+#### Preview L402 cost
+
+Before paying, you can check what an L402-protected resource will cost:
+
+```bash
+curl -X POST https://your-deployment.vercel.app/api/l402/preview \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://lightningfaucet.com/api/l402/joke"}'
+```
+
+Returns:
+```json
+{
+  "success": true,
+  "data": {
+    "requires_payment": true,
+    "invoice_amount_sats": 21,
+    "invoice": "lnbc210n1p...",
+    "macaroon": "AgELbGlnaHRuaW5n..."
+  }
+}
+```
+
+If the resource doesn't require payment (non-402 response), you'll get `requires_payment: false` with the response data.
+
 #### Handling pending L402 payments
 
 Lightning payments via Spark are asynchronous. If the payment succeeds but the preimage isn't available within the timeout window (~7.5 seconds), the proxy returns a `pending` status instead of failing:
@@ -123,6 +155,30 @@ curl "https://your-deployment.vercel.app/api/l402/status?id=a1b2c3d4..." \
 The pending state is stored in Redis with a 1-hour TTL. If you don't poll within that window, the pending record expires and you'll need to make a new L402 request (which will pay again).
 
 **Important for agent developers:** Your agent logic should include a retry loop for L402 requests. The payment has already been sent — failing to poll means you paid but didn't get the content.
+
+#### Token caching
+
+L402 tokens are cached per-domain and reused automatically. When you make a request to a domain you've already paid, the proxy tries the cached token first. If it still works, you get the content without paying again. If the server returns 402 (token expired), the proxy pays for a new token and caches it.
+
+The response includes `cached: true` when a cached token was used:
+
+```json
+{
+  "success": true,
+  "data": {
+    "status": 200,
+    "paid": false,
+    "cached": true,
+    "data": {"setup": "...", "punchline": "..."}
+  }
+}
+```
+
+Tokens are cached for up to 24 hours (or until the server rejects them).
+
+#### Automatic retry for empty responses
+
+Some L402 servers return empty or null content immediately after payment (they may not have processed the preimage yet). The proxy automatically retries the final fetch up to 3 times with 200ms delays if the response looks empty. This covers cases where the protected content has null fields (e.g., `{"setup": null, "punchline": null}`) or is entirely empty.
 
 ## Environment variables
 
