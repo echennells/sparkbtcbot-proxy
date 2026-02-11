@@ -54,8 +54,7 @@ GET /api/transactions?limit=20&offset=0
 Returns recent transfers.
 
 ### Get Fee Estimate
-POST /api/fee-estimate
-Body: { "invoice": "lnbc..." }
+GET /api/fee-estimate?invoice=lnbc...
 Returns estimated fee for a Lightning payment.
 
 ### Get Logs
