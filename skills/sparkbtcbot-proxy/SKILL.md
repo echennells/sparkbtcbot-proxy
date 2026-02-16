@@ -2,6 +2,18 @@
 name: sparkbtcbot-proxy
 description: Use a Spark Bitcoin L2 wallet proxy for AI agents via HTTP API. Check balances, send payments, create invoices, pay L402 paywalls — all without holding the mnemonic. Use when user mentions "Spark proxy," "wallet API," "L402," "proxy payment," "bearer token auth," or wants secured Bitcoin capabilities for an agent.
 argument-hint: "[Optional: specify operation - balance, pay, invoice, l402, transfer, or setup]"
+homepage: https://github.com/echennells/sparkbtcbot-proxy
+source: https://github.com/echennells/sparkbtcbot-proxy
+requires:
+  env:
+    - name: PROXY_URL
+      description: HTTPS URL of your deployed sparkbtcbot-proxy instance (e.g., https://your-app.vercel.app)
+      sensitive: false
+    - name: PROXY_TOKEN
+      description: Bearer token for proxy authentication. Create via POST /api/tokens with an admin token. Use least-privilege roles — prefer 'read-only', 'invoice', or 'pay-only' over 'admin' for agents.
+      sensitive: true
+model-invocation: autonomous
+model-invocation-reason: This skill enables agents to call a wallet proxy API. Autonomous invocation is intentional for payment workflows, but the proxy enforces spending limits and role-based access. Always use least-privilege tokens and set per-tx/daily caps on the proxy side.
 ---
 
 # Spark Bitcoin L2 Proxy for AI Agents
@@ -28,6 +40,24 @@ You are an expert in using the sparkbtcbot-proxy — a serverless HTTP API that 
 - Testing or development
 - Agent needs offline signing
 - You're building the proxy itself
+
+## Before You Start
+
+1. **Deploy your own proxy** — see [sparkbtcbot-proxy](https://github.com/echennells/sparkbtcbot-proxy) for setup instructions. The proxy runs on Vercel (free tier works) with Upstash Redis.
+
+2. **Use HTTPS only** — never connect to a proxy over plain HTTP. All Vercel deployments use HTTPS by default.
+
+3. **Create least-privilege tokens** — don't give agents admin tokens. Use the most restrictive role that works:
+   - `read-only` for monitoring/dashboard agents
+   - `invoice` for agents that receive payments but don't spend
+   - `pay-only` for agents that pay L402 paywalls but don't create invoices
+   - `admin` only for your own management scripts
+
+4. **Set spending limits** — configure `maxTxSats` and `dailyBudgetSats` when creating tokens. The proxy enforces these server-side.
+
+5. **Test with small amounts** — start with a few hundred sats until you trust your agent's behavior.
+
+6. **Have a revocation plan** — know how to revoke tokens via `DELETE /api/tokens` if an agent is compromised.
 
 ## Token Roles
 
