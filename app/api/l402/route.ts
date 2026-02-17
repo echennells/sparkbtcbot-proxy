@@ -151,7 +151,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { url, method = "GET", headers = {}, body: requestBody, maxFeeSats = 10 } = body;
+    const { url, method = "GET", headers = {}, body: requestBody, maxFeeSats = 10, preview = false } = body;
 
     if (!url || typeof url !== "string") {
       return errorResponse("url is required", "BAD_REQUEST");
@@ -197,8 +197,8 @@ export async function POST(request: NextRequest) {
       return false;
     };
 
-    // Step 0: Check for cached L402 token for this domain
-    const cachedToken = await getCachedToken(domain);
+    // Step 0: Check for cached L402 token for this domain (skip if preview mode)
+    const cachedToken = preview ? null : await getCachedToken(domain);
     if (cachedToken) {
       const fetchWithCachedToken = async () => {
         const response = await fetch(url, {
@@ -325,6 +325,36 @@ export async function POST(request: NextRequest) {
         "Invalid L402 response: missing invoice or macaroon",
         "L402_INVALID_CHALLENGE"
       );
+    }
+
+    // If preview mode, return challenge without paying
+    if (preview) {
+      // Decode invoice to get amount for preview
+      let invoiceAmountSats: number | undefined;
+      let expiryTimestamp: number | undefined;
+      try {
+        const decoded = decode(challenge.invoice);
+        const amountSection = decoded.sections.find((s) => s.name === "amount");
+        if (amountSection && "value" in amountSection && amountSection.value) {
+          invoiceAmountSats = Math.ceil(Number(amountSection.value) / 1000);
+        }
+        const expirySection = decoded.sections.find((s) => s.name === "expiry");
+        const timestampSection = decoded.sections.find((s) => s.name === "timestamp");
+        if (expirySection && "value" in expirySection && timestampSection && "value" in timestampSection) {
+          expiryTimestamp = Number(timestampSection.value) + Number(expirySection.value);
+        }
+      } catch {
+        // Ignore decode errors in preview - just return without amount
+      }
+
+      return successResponse({
+        requires_payment: true,
+        invoice_amount_sats: invoiceAmountSats,
+        price_sats: challenge.priceSats,
+        invoice: challenge.invoice,
+        macaroon: challenge.macaroon,
+        expiry_timestamp: expiryTimestamp,
+      });
     }
 
     // Step 3: Decode invoice to get the actual payment amount
