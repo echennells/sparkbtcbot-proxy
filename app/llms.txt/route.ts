@@ -41,8 +41,9 @@ Requires admin or pay-only role.
 
 ### L402 Paywall Requests
 POST /api/l402
-Body: { "url": "https://...", "method": "GET", "maxFeeSats": 10 }
+Body: { "url": "https://...", "method": "GET", "maxFeeSats": 10, "preview": false }
 Automatically pays L402 challenges and returns the response.
+Set "preview": true to check cost without paying (returns invoice, macaroon, price).
 Tokens are cached per-domain — subsequent requests reuse the token without paying again.
 Retries up to 3 times if server returns empty content after payment.
 May return status: "pending" if preimage takes too long — poll GET /api/l402/status?id=<pendingId> to complete.
