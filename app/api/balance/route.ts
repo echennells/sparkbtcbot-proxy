@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
     const tokens: Record<string, string> = {};
     if (tokenBalances) {
       for (const [key, value] of tokenBalances) {
-        tokens[key] = value.balance.toString();
+        tokens[key] = value.toString();
       }
     }
 
