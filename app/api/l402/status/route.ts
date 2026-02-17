@@ -6,6 +6,34 @@ import { getPendingL402, deletePendingL402 } from "../route";
 
 const MAX_POLL_ATTEMPTS = 10;
 const POLL_INTERVAL_MS = 500;
+const MAX_FINAL_RETRIES = 3;
+const FINAL_RETRY_DELAY_MS = 200;
+
+// Helper to check if response indicates server hasn't verified payment yet
+function shouldRetryResponse(status: number, data: unknown): boolean {
+  // Retry on empty data
+  if (data === null || data === undefined) return true;
+  if (typeof data === "string" && data.trim() === "") return true;
+  // Retry on non-2xx status (server might return 402/400/500 if payment not yet verified)
+  if (status < 200 || status >= 300) return true;
+  // Check for error-like responses that suggest payment verification is pending
+  if (data && typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+    // Check for null fields that should have content
+    if ("setup" in obj && obj.setup === null) return true;
+    if ("punchline" in obj && obj.punchline === null) return true;
+    // Common error indicators
+    if ("error" in obj) return true;
+    if (obj.status === "pending" || obj.status === "processing") return true;
+    if (typeof obj.message === "string") {
+      const msg = obj.message.toLowerCase();
+      if (msg.includes("payment") || msg.includes("verify") || msg.includes("pending") || msg.includes("processing")) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 export async function GET(request: NextRequest) {
   const pendingId = request.nextUrl.searchParams.get("id");
@@ -102,9 +130,8 @@ export async function GET(request: NextRequest) {
     });
 
     // Retry the original request with L402 authorization
-    let finalResponse: Response;
-    try {
-      finalResponse = await fetch(pending.url, {
+    const fetchWithAuth = async () => {
+      const response = await fetch(pending.url, {
         method: pending.method,
         headers: {
           "Content-Type": "application/json",
@@ -113,6 +140,26 @@ export async function GET(request: NextRequest) {
         },
         body: pending.body ? JSON.stringify(pending.body) : undefined,
       });
+
+      const contentType = response.headers.get("content-type") || "";
+      let data: unknown;
+      if (contentType.includes("application/json")) {
+        data = await response.json();
+      } else {
+        data = await response.text();
+      }
+      return { status: response.status, data };
+    };
+
+    let finalResult: { status: number; data: unknown };
+    try {
+      finalResult = await fetchWithAuth();
+
+      // Retry if response indicates server hasn't verified payment yet
+      for (let i = 0; i < MAX_FINAL_RETRIES && shouldRetryResponse(finalResult.status, finalResult.data); i++) {
+        await new Promise((resolve) => setTimeout(resolve, FINAL_RETRY_DELAY_MS));
+        finalResult = await fetchWithAuth();
+      }
     } catch (err) {
       return errorResponse(
         `L402 retry failed: ${err instanceof Error ? err.message : "Unknown error"}`,
@@ -123,21 +170,12 @@ export async function GET(request: NextRequest) {
     // Clean up the pending record
     await deletePendingL402(pendingId);
 
-    const contentType = finalResponse.headers.get("content-type") || "";
-    let finalData: unknown;
-
-    if (contentType.includes("application/json")) {
-      finalData = await finalResponse.json();
-    } else {
-      finalData = await finalResponse.text();
-    }
-
     return successResponse({
-      status: finalResponse.status,
+      status: finalResult.status,
       paid: true,
       priceSats: pending.priceSats,
       preimage,
-      data: finalData,
+      data: finalResult.data,
     });
   });
 }

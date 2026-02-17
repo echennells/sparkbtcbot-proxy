@@ -21,7 +21,7 @@ Gives AI agents scoped wallet access without exposing the mnemonic:
 
 **Ask the user for these upfront:**
 
-- Vercel account (free Hobby tier works)
+- Vercel API token (from https://vercel.com/account/tokens) and team ID (from dashboard URL or `vercel teams ls`)
 - Upstash account email and API key (from https://console.upstash.com/account/api) — OR existing `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` if they already have a database
 - BIP39 mnemonic for the Spark wallet (or generate one in step 3)
 - Node.js 20+
@@ -78,11 +78,18 @@ openssl rand -base64 30
 
 ### 5. Deploy to Vercel
 
+First, create the project and get its ID:
+
 ```bash
-npx vercel --prod
+curl -s -X POST "https://api.vercel.com/v10/projects?teamId=<TEAM_ID>" \
+  -H "Authorization: Bearer <VERCEL_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "sparkbtcbot-proxy", "framework": "nextjs"}'
 ```
 
-When prompted, accept the defaults. Then set environment variables. All 7 are required:
+The response includes `id` (the project ID) — save it for the next steps.
+
+Then set environment variables via the API. All 7 are required:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
@@ -94,7 +101,7 @@ When prompted, accept the defaults. Then set environment variables. All 7 are re
 | `MAX_TRANSACTION_SATS` | Per-transaction spending cap | `10000` |
 | `DAILY_BUDGET_SATS` | Daily spending cap (resets midnight UTC) | `100000` |
 
-**Important:** Do NOT use `vercel env add` with heredoc/`<<<` input — it appends newlines that break the Spark SDK. Either use the Vercel dashboard or the REST API:
+**Important:** Do NOT use `vercel env add` with heredoc/`<<<` input — it appends newlines that break the Spark SDK. Use the REST API:
 
 ```bash
 curl -X POST "https://api.vercel.com/v10/projects/<PROJECT_ID>/env?teamId=<TEAM_ID>" \
@@ -103,11 +110,21 @@ curl -X POST "https://api.vercel.com/v10/projects/<PROJECT_ID>/env?teamId=<TEAM_
   -d '{"type":"encrypted","key":"SPARK_MNEMONIC","value":"your mnemonic here","target":["production","preview","development"]}'
 ```
 
-Redeploy after setting env vars:
+Repeat for each env var (use `"type":"plain"` for non-sensitive values like `SPARK_NETWORK`).
+
+Then deploy using environment variables for reliable non-interactive deployment:
 
 ```bash
-npx vercel --prod
+npm install -g vercel
+
+VERCEL_ORG_ID=<TEAM_ID> VERCEL_PROJECT_ID=<PROJECT_ID> \
+  vercel deploy --prod --yes --token <VERCEL_TOKEN>
 ```
+
+**Troubleshooting:**
+- `ERESOLVE` npm errors: Install vercel globally with `npm install -g vercel` instead of using npx
+- "Project was deleted" errors: Remove stale config with `rm -rf .vercel/` and retry
+- "missing_scope" errors: Use the `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` env vars as shown above
 
 ### 6. Test
 
@@ -258,15 +275,26 @@ else:
 ### Rotate the admin fallback token
 
 1. Generate a new token: `openssl rand -base64 30`
-2. Update `API_AUTH_TOKEN` in Vercel env vars
-3. Redeploy: `npx vercel --prod`
+2. Update `API_AUTH_TOKEN` in Vercel env vars (via dashboard or API)
+3. Redeploy:
+   ```bash
+   VERCEL_ORG_ID=<TEAM_ID> VERCEL_PROJECT_ID=<PROJECT_ID> \
+     vercel deploy --prod --yes --token <VERCEL_TOKEN>
+   ```
 4. Update any agents using the old token
 
 Redis-stored tokens are not affected by this — they continue working.
 
 ### Adjust spending limits
 
-Update `MAX_TRANSACTION_SATS` and `DAILY_BUDGET_SATS` in Vercel env vars and redeploy. Budget resets daily at midnight UTC.
+Update `MAX_TRANSACTION_SATS` and `DAILY_BUDGET_SATS` in Vercel env vars and redeploy:
+
+```bash
+VERCEL_ORG_ID=<TEAM_ID> VERCEL_PROJECT_ID=<PROJECT_ID> \
+  vercel deploy --prod --yes --token <VERCEL_TOKEN>
+```
+
+Budget resets daily at midnight UTC.
 
 ### Check logs
 

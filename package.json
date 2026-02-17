@@ -18,6 +18,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "bip39": "^3.1.0",
     "typescript": "^5"
   }
 }

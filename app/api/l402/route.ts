@@ -175,6 +175,28 @@ export async function POST(request: NextRequest) {
       return false;
     };
 
+    // Helper to check if response indicates server hasn't verified payment yet
+    const shouldRetryResponse = (status: number, data: unknown): boolean => {
+      // Retry on empty data
+      if (isEmptyData(data)) return true;
+      // Retry on non-2xx status (server might return 402/400/500 if payment not yet verified)
+      if (status < 200 || status >= 300) return true;
+      // Check for error-like responses that suggest payment verification is pending
+      if (data && typeof data === "object") {
+        const obj = data as Record<string, unknown>;
+        // Common error indicators
+        if ("error" in obj) return true;
+        if (obj.status === "pending" || obj.status === "processing") return true;
+        if (typeof obj.message === "string") {
+          const msg = obj.message.toLowerCase();
+          if (msg.includes("payment") || msg.includes("verify") || msg.includes("pending") || msg.includes("processing")) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+
     // Step 0: Check for cached L402 token for this domain
     const cachedToken = await getCachedToken(domain);
     if (cachedToken) {
@@ -219,12 +241,12 @@ export async function POST(request: NextRequest) {
         if (isTokenInvalid(cachedResult.status, cachedResult.data)) {
           await deleteCachedToken(domain);
         } else {
-          // Non-error response - check if content is empty (might be single-use token)
-          // Retry a few times in case server is slow
+          // Non-error response - check if content is empty or error-like (might be single-use token)
+          // Retry a few times in case server is slow to verify payment
           const MAX_CACHE_RETRIES = 2;
           const CACHE_RETRY_DELAY_MS = 200;
 
-          for (let i = 0; i < MAX_CACHE_RETRIES && isEmptyData(cachedResult.data); i++) {
+          for (let i = 0; i < MAX_CACHE_RETRIES && shouldRetryResponse(cachedResult.status, cachedResult.data); i++) {
             await new Promise((resolve) => setTimeout(resolve, CACHE_RETRY_DELAY_MS));
             cachedResult = await fetchWithCachedToken();
             if (isTokenInvalid(cachedResult.status, cachedResult.data)) break;
@@ -233,8 +255,8 @@ export async function POST(request: NextRequest) {
           // If token became invalid after retries, delete cache and continue to pay
           if (isTokenInvalid(cachedResult.status, cachedResult.data)) {
             await deleteCachedToken(domain);
-          } else if (isEmptyData(cachedResult.data)) {
-            // Still empty after retries - token might be single-use and exhausted
+          } else if (shouldRetryResponse(cachedResult.status, cachedResult.data)) {
+            // Still getting error-like response after retries - token might be single-use and exhausted
             // Delete cache and continue to pay for fresh token
             await deleteCachedToken(domain);
           } else {
@@ -481,8 +503,9 @@ export async function POST(request: NextRequest) {
     try {
       finalResult = await fetchWithAuth();
 
-      // Retry if data looks empty - server might not have processed payment yet
-      for (let i = 0; i < MAX_FINAL_RETRIES && isEmptyData(finalResult.data); i++) {
+      // Retry if response indicates server hasn't verified payment yet
+      // This handles: empty data, non-2xx status, or error-like JSON responses
+      for (let i = 0; i < MAX_FINAL_RETRIES && shouldRetryResponse(finalResult.status, finalResult.data); i++) {
         await new Promise((resolve) => setTimeout(resolve, FINAL_RETRY_DELAY_MS));
         finalResult = await fetchWithAuth();
       }
