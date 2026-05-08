@@ -60,7 +60,11 @@ Works with any role.
 
 ### Check Balance
 GET /api/balance
-Returns: { balance, tokenBalances }
+Returns: {
+  balance: string (deprecated, use satsBalance.available),
+  satsBalance: { available, owned, incoming } (all string-bigint),
+  tokenBalances: Record<id, { ownedBalance, availableToSendBalance, ticker, name, decimals }>
+}
 
 ### Get Transactions
 GET /api/transactions?limit=20&offset=0

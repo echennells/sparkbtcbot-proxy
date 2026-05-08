@@ -97,19 +97,25 @@ Response:
   "success": true,
   "data": {
     "balance": "50000",
+    "satsBalance": {
+      "available": "50000",
+      "owned": "50000",
+      "incoming": "0"
+    },
     "tokenBalances": {
       "btkn1...": {
-        "balance": "1000",
-        "tokenMetadata": {
-          "tokenName": "Example Token",
-          "tokenTicker": "EXT",
-          "decimals": 0
-        }
+        "ownedBalance": "1000",
+        "availableToSendBalance": "1000",
+        "ticker": "EXT",
+        "name": "Example Token",
+        "decimals": 6
       }
     }
   }
 }
 ```
+
+`balance` is the deprecated top-level field — prefer `satsBalance.available` for spendable sats. `satsBalance.owned` includes leaves locked in pending outgoing transfers; `satsBalance.incoming` is pending inbound, not yet claimed. Token entries expose both `ownedBalance` (total) and `availableToSendBalance` (excludes pending outbound).
 
 #### Get Wallet Info
 
@@ -517,7 +523,9 @@ const agent = new SparkProxyAgent(
 );
 
 const balance = await agent.getBalance();
-console.log('Balance:', balance.balance, 'sats');
+console.log('Available:', balance.satsBalance.available, 'sats');
+console.log('Owned:   ', balance.satsBalance.owned, 'sats (includes pending outbound)');
+console.log('Incoming:', balance.satsBalance.incoming, 'sats (pending inbound)');
 
 const invoice = await agent.createLightningInvoice(1000, 'Test payment');
 console.log('Invoice:', invoice.encodedInvoice);

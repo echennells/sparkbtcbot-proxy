@@ -17,18 +17,28 @@ Gives AI agents scoped wallet access without exposing the mnemonic:
 - Activity logging to Redis
 - Lazy detection of paid Lightning invoices
 
+## Rules for Claude when operating this skill
+
+These rules apply whenever this skill is active. The proxy's `SPARK_MNEMONIC` controls all funds in the wallet — leaks into chat or shell history are catastrophic.
+
+- **DO NOT print the mnemonic to chat, logs, or any other output.** Not for verification, not for "let's just check it's correct." If it must be displayed once during setup (step 3), surface it to the user with explicit instructions to save offline, and never echo it back.
+- **DO NOT pass the mnemonic on the command line as an arg or in shell variables that get logged.** Pipe it directly into the Vercel env-var API call without it touching shell history.
+- **DO NOT run `env`, `printenv`, `echo $SPARK_MNEMONIC`, or `cat .env`** in the conversation.
+- **DO NOT include the mnemonic in commit messages, code, fixtures, or git history.**
+- **Never include credentials in the chat that you've been given.** Vercel API tokens and Redis credentials should be referenced by name (e.g. `$VERCEL_TOKEN`), not echoed back.
+- **If a leak happens, stop and tell the user.** Do not auto-rotate or attempt to "clean up" without explicit user instruction.
+
 ## What You Need
 
 **Ask the user for these upfront:**
 
 - Vercel API token (from https://vercel.com/account/tokens) and team ID (from dashboard URL or `vercel teams ls`)
-- Upstash account email and API key (from https://console.upstash.com/account/api) — OR existing `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` if they already have a database
 - BIP39 mnemonic for the Spark wallet (or generate one in step 3)
 - Node.js 20+
 
 **Generated during setup (don't ask for these):**
 
-- `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` — created by the Upstash management API in step 2
+- `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` — provisioned automatically when you add the Vercel Marketplace Redis integration (step 2)
 - `API_AUTH_TOKEN` — generated in step 4
 
 ## Step-by-Step Deployment
@@ -41,34 +51,44 @@ cd sparkbtcbot-proxy
 npm install
 ```
 
-### 2. Create Upstash Redis
+### 2. Provision Redis via Vercel Marketplace
 
-If the user already has `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`, skip to step 3.
+Recommended: provision Redis as a Vercel Marketplace integration. Vercel handles provisioning, billing, and auto-populates `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` as encrypted env vars on the project. **No separate Upstash account or API key juggling.**
 
-Otherwise, create a database via the Upstash API. The user needs their Upstash email and API key from https://console.upstash.com/account/api:
+This is a UI step the user does in their browser (the marketplace flow does not have a stable headless API yet):
 
-```bash
-curl -X POST "https://api.upstash.com/v2/redis/database" \
-  -u "UPSTASH_EMAIL:UPSTASH_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "sparkbtcbot-proxy", "region": "global", "primary_region": "us-east-1"}'
-```
+1. Open the Vercel dashboard → Storage tab on the project (or create the project first in step 5 and come back)
+2. Click "Create" → choose Redis (powered by Upstash)
+3. Pick the free tier and a region close to where the project will be deployed
+4. Connect it to the `sparkbtcbot-proxy` project — env vars are auto-attached
 
-**Note:** Regional database creation is deprecated. You must use `"region": "global"` with a `"primary_region"` field. The Upstash docs may not reflect this yet.
-
-The response includes `rest_url` and `rest_token` — save these for step 5.
+If the user prefers to manage Upstash directly (separate account, multi-project sharing), tell them to create a database at https://console.upstash.com, copy `rest_url` and `rest_token`, and they'll set them manually as env vars in step 5.
 
 ### 3. Generate a wallet mnemonic (if needed)
 
-`SparkWallet.initialize()` returns `{ mnemonic, wallet }` when called without a mnemonic. One-liner:
+`SparkWallet.initialize()` returns `{ mnemonic, wallet }` when called without a mnemonic. **The mnemonic controls all funds and cannot be re-derived later** (the SDK has no `getMnemonic()` getter).
+
+Two options:
+
+**Option A — let the user generate via a BIP39 tool they trust** (paper wallet, hardware wallet, etc.). Lowest exposure, no shell-history risk. Have them paste the resulting 12 or 24 words into the env-var API call in step 5 *directly* (heredoc into the curl body), never into a shell variable that gets logged.
+
+**Option B — generate via the SDK if the user doesn't have a BIP39 generator handy.** Pipe the output through Vercel's env-var API in one step so the mnemonic never sits in shell history:
 
 ```bash
-node -e "import('@buildonspark/spark-sdk').then(({SparkWallet}) => SparkWallet.initialize({mnemonicOrSeed: null, options: {network: 'MAINNET'}}).then(r => { console.log(r.mnemonic); r.wallet.cleanupConnections() }))"
+node -e "import('@buildonspark/spark-sdk').then(async ({SparkWallet}) => {
+  const r = await SparkWallet.initialize({options:{network:'MAINNET'}});
+  process.stdout.write(r.mnemonic);
+  await r.wallet.cleanupConnections();
+})" | tee /dev/tty | curl -s -X POST "https://api.vercel.com/v10/projects/<PROJECT_ID>/env?teamId=<TEAM_ID>" \
+  -H "Authorization: Bearer <VERCEL_TOKEN>" \
+  -H "Content-Type: application/json" \
+  --data-binary @- \
+  -d '{"type":"encrypted","key":"SPARK_MNEMONIC","value":"<placeholder — pipe-fill from stdin in real flow>","target":["production","preview","development"]}'
 ```
 
-Save the 12-word mnemonic securely — it controls all funds in the wallet. There is no `getMnemonic()` method; you can only retrieve the mnemonic at initialization time.
+In practice, the cleanest pattern is: print the mnemonic to the user's terminal *once* with explicit instructions to save it offline, then immediately POST it to Vercel via API and clear the terminal. The user takes responsibility for never letting it land in `.bash_history` / `.zsh_history`.
 
-Or use any BIP39 mnemonic generator. 12 or 24 words.
+**Important:** mnemonic generation can only happen at `SparkWallet.initialize()` time. There is no recovery API. Lose it = lose the wallet.
 
 ### 4. Generate an API auth token
 
@@ -89,15 +109,15 @@ curl -s -X POST "https://api.vercel.com/v10/projects?teamId=<TEAM_ID>" \
 
 The response includes `id` (the project ID) — save it for the next steps.
 
-Then set environment variables via the API. All 7 are required:
+Then set environment variables via the API. The two `UPSTASH_*` variables are auto-populated by the Vercel Marketplace Redis integration from step 2 — set them manually only if the user is bringing their own Upstash account.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `SPARK_MNEMONIC` | 12-word BIP39 mnemonic | `fence connect trigger ...` |
 | `SPARK_NETWORK` | Spark network | `MAINNET` |
 | `API_AUTH_TOKEN` | Admin fallback bearer token | output of step 4 |
-| `UPSTASH_REDIS_REST_URL` | Redis REST endpoint | `https://xxx.upstash.io` |
-| `UPSTASH_REDIS_REST_TOKEN` | Redis auth token | from step 2 |
+| `UPSTASH_REDIS_REST_URL` | Auto-populated by marketplace integration; set only if BYO Upstash | `https://xxx.upstash.io` |
+| `UPSTASH_REDIS_REST_TOKEN` | Auto-populated by marketplace integration; set only if BYO Upstash | from Upstash console |
 | `MAX_TRANSACTION_SATS` | Per-transaction spending cap | `10000` |
 | `DAILY_BUDGET_SATS` | Daily spending cap (resets midnight UTC) | `100000` |
 
