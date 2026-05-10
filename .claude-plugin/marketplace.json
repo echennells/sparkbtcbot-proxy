@@ -1,0 +1,28 @@
+{
+  "name": "sparkbtcbot-proxy",
+  "owner": {
+    "name": "Eric Chennells",
+    "url": "https://github.com/echennells"
+  },
+  "metadata": {
+    "description": "Spark Bitcoin L2 wallet proxy for AI agents — scoped HTTP API access to a server-held Spark wallet, with bearer-token auth, role-based permissions, spending limits, L402 paywall payment, and Vercel deployment automation",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "sparkbtcbot-proxy",
+      "description": "Use a Spark Bitcoin L2 wallet proxy for AI agents via HTTP API. Bundles two skills: the API-usage skill (check balances, send payments, create invoices, pay L402 paywalls — all without holding the mnemonic) and the deploy skill (stand up a new proxy on Vercel).",
+      "version": "0.1.0",
+      "author": {
+        "name": "Eric Chennells",
+        "url": "https://github.com/echennells"
+      },
+      "homepage": "https://github.com/echennells/sparkbtcbot-proxy",
+      "source": "./",
+      "skills": [
+        "./skills/sparkbtcbot-proxy",
+        "./skills/deploy"
+      ]
+    }
+  ]
+}

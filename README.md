@@ -196,6 +196,19 @@ Some L402 servers return empty or null content immediately after payment (they m
 
 You'll need a [Vercel](https://vercel.com) account (free tier works) and an [Upstash Redis](https://console.upstash.com) database (free tier works).
 
+### Option 1 — install as a Claude Code plugin (for using the deployed proxy)
+
+If your goal is to give an agent access to a proxy that already exists (yours or someone else's), install the skill via the Claude Code plugin system:
+
+```bash
+claude plugin marketplace add https://github.com/echennells/sparkbtcbot-proxy
+claude plugin install sparkbtcbot-proxy
+```
+
+That registers this repo as a marketplace and installs both the API-usage skill and the deploy skill. The agent can then call the proxy with `PROXY_URL` and `PROXY_TOKEN` env vars set.
+
+### Option 2 — clone and deploy your own proxy
+
 ```bash
 git clone https://github.com/echennells/sparkbtcbot-proxy.git
 cd sparkbtcbot-proxy
@@ -205,7 +218,7 @@ npx vercel --prod
 
 Set the environment variables in the Vercel dashboard, then redeploy.
 
-For detailed step-by-step instructions (including generating a mnemonic and creating the Redis database via API), see [`skills/deploy/SKILL.md`](skills/deploy/SKILL.md). That file is also a Claude skill you can give to an agent to handle deployment for you.
+For detailed step-by-step instructions (including generating a mnemonic and creating the Redis database via API), see [`skills/deploy/SKILL.md`](skills/deploy/SKILL.md). That file is also part of the Claude plugin above, so an installed agent can drive deployment for you.
 
 ## See also
 
